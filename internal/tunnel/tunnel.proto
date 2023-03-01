@@ -1,0 +1,141 @@
+/*
+ * Copyright 2021-2023 OpsMx, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License")
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+syntax = "proto3";
+
+package tunnel;
+
+option go_package = "./;tunnel";
+
+message Annotation {
+    string name = 1;
+    string value = 2;
+}
+
+message EndpointHealth {
+    string name = 1;
+    string type = 2;
+    bool configured = 3;
+    repeated string namespaces = 4; // used for kubernetes mostly
+    string accountID = 5; // AWS
+    string assumeRole = 6; // AWS
+    repeated Annotation annotations = 7;
+}
+
+message AgentInformation {
+    repeated Annotation annotations = 2;
+}
+
+message Hello {
+    repeated EndpointHealth endpoints = 1;
+    string version = 2;
+    string hostname = 3;
+    bytes clientCertificate = 4; // used when we can't terminate SSL directly
+    AgentInformation agentInfo = 5;
+}
+
+message Data {
+    string id = 1;
+    bytes body = 2;
+}
+
+message HelloResponse {
+    repeated EndpointHealth endpoints = 1;
+    string version = 2;
+}
+
+message SendDataResponse {}
+
+message TunnelHeaders {
+    string id = 1;
+    int32 status = 2;
+    repeated HttpHeader headers = 3;
+    int64 contentLength = 4;
+}
+
+message HttpHeader {
+    string name = 1;
+    repeated string values = 2;
+}
+
+message SendHeadersResponse {}
+
+message ReceiveDataRequest {
+    string id = 1;
+}
+
+message WaitForRequestRequest {}
+
+// TunnelRequest causes the receiving side to begin an HTTP tunnel.
+message TunnelRequest {
+    optional string id = 1;
+    string name = 2;
+    string type = 3;
+    string method = 4;
+    string URI = 5;
+    repeated HttpHeader headers = 6;
+    bytes body = 7;
+}
+
+message StartTunnelResponse {
+    string id = 1;
+}
+
+message PingRequest {
+    uint64 ts = 1;
+}
+
+message PingResponse {
+    uint64 ts = 1;
+    uint64 echoedTs = 2;
+}
+
+message CloseTunnelRequest {
+    string id = 1;
+}
+
+message CloseTunnelResponse {}
+
+// Service (runs on the controller)
+service TunnelService {
+    // Initial handshake, sent from agent to controller on the control connection, before any other messages.
+    rpc SendHello(Hello) returns (HelloResponse) {}
+
+    // Keep alive, sent from the agent to the controller, on control and data connections.
+    rpc Ping(PingRequest) returns (PingResponse) {}
+
+    // The agent will call StartRequest() when it wants the controller to perform
+    // an HTTP fetch.
+    rpc StartTunnel(TunnelRequest) returns (TunnelHeaders) {}
+
+    // The agent will perform a long-running call to WaitForRequest() and handle
+    // any HTTP request found.
+    rpc WaitForRequest(WaitForRequestRequest) returns (TunnelRequest) {}
+
+    rpc CloseTunnel(CloseTunnelRequest) returns (CloseTunnelResponse) {}
+
+    // HTTP data, issued from the agent to controller.
+    //
+    // The Send* methods are when the agent is performing the HTTP request, and
+    // wants to send the headers and data response to the controller, which will
+    // send it to the client.
+    //
+    // The Receive* methods are when the controller is performing the HTTP
+    // request, and the agent has the client which wants the data.
+    rpc SendData(Data) returns (SendDataResponse) {}
+    rpc SendHeaders(TunnelHeaders) returns (SendHeadersResponse) {}
+    rpc ReceiveData(ReceiveDataRequest) returns (Data) {}
+}
