@@ -16,4 +16,60 @@
 
 package main
 
-func main() {}
+import (
+	"context"
+	"log"
+	"math/rand"
+	"net"
+	"time"
+
+	"github.com/skandragon/grpc-datacon/internal/tunnel"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/status"
+)
+
+func check(err error) {
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+var kaep = keepalive.EnforcementPolicy{
+	MinTime:             5 * time.Second,
+	PermitWithoutStream: true,
+}
+
+var kasp = keepalive.ServerParameters{
+	MaxConnectionIdle: 20 * time.Minute,
+	Time:              10 * time.Second,
+	Timeout:           10 * time.Second,
+}
+
+type server struct {
+	tunnel.UnimplementedTunnelServiceServer
+}
+
+func (s *server) Ping(ctx context.Context, in *tunnel.PingRequest) (*tunnel.PingResponse, error) {
+	log.Printf("starting Ping(%d)", in.Ts)
+	time.Sleep(time.Duration(rand.Intn(5)) * time.Second)
+	//	r := &tunnel.PingResponse{
+	//		Ts:       uint64(time.Now().UnixNano()),
+	//		EchoedTs: in.Ts,
+	//	}
+
+	return nil, status.New(codes.Aborted, "Aborted because I'm mean...").Err()
+
+	// log.Printf("exiting Ping(%d)", in.Ts)
+	// return r, nil
+}
+
+func main() {
+	lis, err := net.Listen("tcp", ":50051")
+	check(err)
+	s := grpc.NewServer(grpc.KeepaliveEnforcementPolicy(kaep), grpc.KeepaliveParams(kasp))
+	tunnel.RegisterTunnelServiceServer(s, &server{})
+	log.Printf("Listening for connections on TCP port 50051")
+	check(s.Serve(lis))
+}
