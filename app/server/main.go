@@ -25,9 +25,7 @@ import (
 
 	"github.com/skandragon/grpc-datacon/internal/tunnel"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/keepalive"
-	"google.golang.org/grpc/status"
 )
 
 func check(err error) {
@@ -54,15 +52,13 @@ type server struct {
 func (s *server) Ping(ctx context.Context, in *tunnel.PingRequest) (*tunnel.PingResponse, error) {
 	log.Printf("starting Ping(%d)", in.Ts)
 	time.Sleep(time.Duration(rand.Intn(5)) * time.Second)
-	//	r := &tunnel.PingResponse{
-	//		Ts:       uint64(time.Now().UnixNano()),
-	//		EchoedTs: in.Ts,
-	//	}
+	r := &tunnel.PingResponse{
+		Ts:       uint64(time.Now().UnixNano()),
+		EchoedTs: in.Ts,
+	}
 
-	return nil, status.New(codes.Aborted, "Aborted because I'm mean...").Err()
-
-	// log.Printf("exiting Ping(%d)", in.Ts)
-	// return r, nil
+	log.Printf("exiting Ping(%d)", in.Ts)
+	return r, nil
 }
 
 func main() {

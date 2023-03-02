@@ -43,18 +43,12 @@ message Hello {
     repeated EndpointHealth endpoints = 1;
     string version = 2;
     string hostname = 3;
-    bytes clientCertificate = 4; // used when we can't terminate SSL directly
-    AgentInformation agentInfo = 5;
+    AgentInformation annotations = 4;
 }
 
 message Data {
     string id = 1;
     bytes body = 2;
-}
-
-message HelloResponse {
-    repeated EndpointHealth endpoints = 1;
-    string version = 2;
 }
 
 message SendDataResponse {}
@@ -103,16 +97,10 @@ message PingResponse {
     uint64 echoedTs = 2;
 }
 
-message CloseTunnelRequest {
-    string id = 1;
-}
-
-message CloseTunnelResponse {}
-
 // Service (runs on the controller)
 service TunnelService {
     // Initial handshake, sent from agent to controller on the control connection, before any other messages.
-    rpc SendHello(Hello) returns (HelloResponse) {}
+    rpc SendHello(Hello) returns (Hello) {}
 
     // Keep alive, sent from the agent to the controller, on control and data connections.
     rpc Ping(PingRequest) returns (PingResponse) {}
@@ -125,8 +113,6 @@ service TunnelService {
     // any HTTP request found.
     rpc WaitForRequest(WaitForRequestRequest) returns (TunnelRequest) {}
 
-    rpc CloseTunnel(CloseTunnelRequest) returns (CloseTunnelResponse) {}
-
     // HTTP data, issued from the agent to controller.
     //
     // The Send* methods are when the agent is performing the HTTP request, and
@@ -135,7 +121,7 @@ service TunnelService {
     //
     // The Receive* methods are when the controller is performing the HTTP
     // request, and the agent has the client which wants the data.
-    rpc SendData(Data) returns (SendDataResponse) {}
+    rpc SendData(stream Data) returns (SendDataResponse) {}
     rpc SendHeaders(TunnelHeaders) returns (SendHeadersResponse) {}
-    rpc ReceiveData(ReceiveDataRequest) returns (Data) {}
+    rpc ReceiveData(ReceiveDataRequest) returns (stream Data) {}
 }
