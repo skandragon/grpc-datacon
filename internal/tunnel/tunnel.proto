@@ -30,8 +30,6 @@ message EndpointHealth {
     string type = 2;
     bool configured = 3;
     repeated string namespaces = 4; // used for kubernetes mostly
-    string accountID = 5; // AWS
-    string assumeRole = 6; // AWS
     repeated Annotation annotations = 7;
 }
 
@@ -57,7 +55,7 @@ message TunnelHeaders {
     string id = 1;
     int32 status = 2;
     repeated HttpHeader headers = 3;
-    int64 contentLength = 4;
+    optional int64 contentLength = 4;
 }
 
 message HttpHeader {
