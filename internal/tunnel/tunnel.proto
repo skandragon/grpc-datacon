@@ -33,29 +33,32 @@ message EndpointHealth {
     repeated Annotation annotations = 7;
 }
 
-message AgentInformation {
-    repeated Annotation annotations = 2;
+message HelloRequest {
+    repeated EndpointHealth endpoints = 3;
+    string version = 4;
+    repeated Annotation annotations = 5;
+    string hostname = 6;
 }
 
-message Hello {
-    repeated EndpointHealth endpoints = 1;
-    string version = 2;
-    string hostname = 3;
-    AgentInformation annotations = 4;
+message HelloResponse {
+    string instanceId = 2;
+    repeated EndpointHealth endpoints = 3;
+    string version = 4;
+    repeated Annotation annotations = 5;
 }
 
 message Data {
-    string id = 1;
-    bytes body = 2;
+    string streamId = 1;
+    bytes body = 3;
 }
 
 message SendDataResponse {}
 
 message TunnelHeaders {
-    string id = 1;
-    int32 status = 2;
-    repeated HttpHeader headers = 3;
-    optional int64 contentLength = 4;
+    string streamId = 1;
+    int32 status = 3;
+    repeated HttpHeader headers = 4;
+    optional int64 contentLength = 5;
 }
 
 message HttpHeader {
@@ -66,39 +69,39 @@ message HttpHeader {
 message SendHeadersResponse {}
 
 message ReceiveDataRequest {
-    string id = 1;
+    string streamId = 1;
 }
 
-message WaitForRequestRequest {}
+message WaitForRequestArgs {}
 
 // TunnelRequest causes the receiving side to begin an HTTP tunnel.
 message TunnelRequest {
-    optional string id = 1;
-    string name = 2;
-    string type = 3;
-    string method = 4;
-    string URI = 5;
-    repeated HttpHeader headers = 6;
-    bytes body = 7;
+    string streamId = 1;
+    string name = 3;
+    string type = 4;
+    string method = 5;
+    string URI = 6;
+    repeated HttpHeader headers = 7;
+    bytes body = 8;
 }
 
 message StartTunnelResponse {
-    string id = 1;
+    string streamId = 1;
 }
 
 message PingRequest {
-    uint64 ts = 1;
+    uint64 ts = 3;
 }
 
 message PingResponse {
-    uint64 ts = 1;
-    uint64 echoedTs = 2;
+    uint64 ts = 3;
+    uint64 echoedTs = 4;
 }
 
 // Service (runs on the controller)
 service TunnelService {
     // Initial handshake, sent from agent to controller on the control connection, before any other messages.
-    rpc SendHello(Hello) returns (Hello) {}
+    rpc Hello(HelloRequest) returns (HelloResponse) {}
 
     // Keep alive, sent from the agent to the controller, on control and data connections.
     rpc Ping(PingRequest) returns (PingResponse) {}
@@ -109,7 +112,7 @@ service TunnelService {
 
     // The agent will perform a long-running call to WaitForRequest() and handle
     // any HTTP request found.
-    rpc WaitForRequest(WaitForRequestRequest) returns (TunnelRequest) {}
+    rpc WaitForRequest(WaitForRequestArgs) returns (TunnelRequest) {}
 
     // HTTP data, issued from the agent to controller.
     //
