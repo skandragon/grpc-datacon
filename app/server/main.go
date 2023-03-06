@@ -18,8 +18,10 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/skandragon/grpc-datacon/internal/logging"
@@ -50,20 +52,43 @@ var kasp = keepalive.ServerParameters{
 }
 
 type agentContext struct {
-	in  chan string
-	out chan string
+	agentKey
+	in       chan string
+	out      chan string
+	lastUsed int64
 }
 
-func newAgentContext() agentContext {
-	return agentContext{
-		in:  make(chan string),
-		out: make(chan string),
+type agentKey struct {
+	agentID   string
+	sessionID string
+}
+
+func newAgentContext(agentID string, sessionID string) (*agentContext, agentKey) {
+	key := agentKey{agentID: agentID, sessionID: sessionID}
+	session := &agentContext{
+		agentKey: key,
+		in:       make(chan string),
+		out:      make(chan string),
+		lastUsed: time.Now().UnixNano(),
 	}
+	return session, key
 }
 
 type server struct {
+	sync.Mutex
 	pb.UnimplementedTunnelServiceServer
-	agents map[string]agentContext
+	agents map[agentKey]*agentContext
+}
+
+func (s *server) findAgentSessionContext(ctx context.Context) (*agentContext, error) {
+	s.Lock()
+	defer s.Unlock()
+	agentID, sessionID := IdentityFromContext(ctx)
+	key := agentKey{agentID: agentID, sessionID: sessionID}
+	if session, found := s.agents[key]; found {
+		return session, nil
+	}
+	return nil, fmt.Errorf("no such agent session connected: %s/%s", agentID, sessionID)
 }
 
 func loggerFromContext(ctx context.Context) (context.Context, *zap.SugaredLogger) {
@@ -79,21 +104,57 @@ func loggerFromContext(ctx context.Context) (context.Context, *zap.SugaredLogger
 	return ctx, logging.WithContext(ctx).Sugar()
 }
 
+func (s *server) registerAgentSession(agentID string, sessionID string) *agentContext {
+	s.Lock()
+	defer s.Unlock()
+	session, key := newAgentContext(agentID, sessionID)
+	s.agents[key] = session
+	return session
+}
+
+func (s *server) debugPrintSessions(ctx context.Context) {
+	_, logger := loggerFromContext(ctx)
+	s.Lock()
+	defer s.Unlock()
+	for key := range s.agents {
+		logger.Infof("agentID %s, sessionID %s", key.agentID, key.sessionID)
+	}
+}
+
+func (s *server) removeAgentSession(session *agentContext) {
+	s.Lock()
+	defer s.Unlock()
+	key := agentKey{agentID: session.agentID, sessionID: session.sessionID}
+	delete(s.agents, key)
+}
+
+func (s *server) touchSession(session *agentContext, t int64) {
+	s.Lock()
+	defer s.Unlock()
+	s.agents[session.agentKey].lastUsed = t
+}
+
 func (s *server) Hello(ctx context.Context, in *pb.HelloRequest) (*pb.HelloResponse, error) {
-	//sessionID, agentID := identityFromContext(ctx)
+	agentID, _ := IdentityFromContext(ctx)
 	_, logger := loggerFromContext(ctx)
 	logger.Infof("Hello")
+	session := s.registerAgentSession(agentID, ulid.GlobalContext.Ulid())
 	return &pb.HelloResponse{
-		InstanceId: ulid.GlobalContext.Ulid(),
+		InstanceId: session.sessionID,
 	}, nil
 }
 
 func (s *server) Ping(ctx context.Context, in *pb.PingRequest) (*pb.PingResponse, error) {
-	//sessionID, agentID := identityFromContext(ctx)
 	_, logger := loggerFromContext(ctx)
+	session, err := s.findAgentSessionContext(ctx)
+	if err != nil {
+		return nil, status.Error(codes.FailedPrecondition, "Hello must be called first")
+	}
+	now := time.Now().UnixNano()
+	s.touchSession(session, now)
 	logger.Infof("Ping")
 	r := &pb.PingResponse{
-		Ts:       uint64(time.Now().UnixNano()),
+		Ts:       uint64(now),
 		EchoedTs: in.Ts,
 	}
 	return r, nil
@@ -101,13 +162,17 @@ func (s *server) Ping(ctx context.Context, in *pb.PingRequest) (*pb.PingResponse
 
 func (s *server) WaitForRequest(ctx context.Context, in *pb.WaitForRequestArgs) (*pb.TunnelRequest, error) {
 	t := time.NewTicker(60 * time.Second)
-	//sessionID, agentID := identityFromContext(ctx)
-	_, logger := loggerFromContext(ctx)
-	logger.Infof("Ping")
+	session, err := s.findAgentSessionContext(ctx)
+	if err != nil {
+		return nil, status.Error(codes.FailedPrecondition, "Hello must be called first")
+	}
+	ctx, logger := loggerFromContext(ctx)
+	logger.Infof("WaitForRequest")
 
 	select {
 	case <-ctx.Done():
 		logger.Infow("closed connection")
+		s.removeAgentSession(session)
 		return nil, status.Error(codes.Canceled, "client closed connection")
 	case <-t.C:
 		return &pb.TunnelRequest{
@@ -120,9 +185,49 @@ func (s *server) WaitForRequest(ctx context.Context, in *pb.WaitForRequestArgs) 
 	}
 }
 
+func (s *server) debugLogger(ctx context.Context) {
+	ctx, logger := loggerFromContext(ctx)
+	t := time.NewTicker(10 * time.Second)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			logger.Infof("sessions:")
+			s.debugPrintSessions(ctx)
+		}
+	}
+}
+
+func (s *server) checkSessionTimeouts(ctx context.Context) {
+	t := time.NewTicker(10 * time.Second)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			now := time.Now().UnixNano()
+			s.expireOldSessions(ctx, now)
+		}
+	}
+}
+
+func (s *server) expireOldSessions(ctx context.Context, now int64) {
+	s.Lock()
+	defer s.Unlock()
+
+	// TODO: check times
+}
+
 func main() {
 	lis, err := net.Listen("tcp", ":50051")
 	check(err)
+
+	sconfig := &server{
+		agents: map[agentKey]*agentContext{},
+	}
 
 	interceptor := NewJWTInterceptor()
 	s := grpc.NewServer(
@@ -131,7 +236,12 @@ func main() {
 		grpc.UnaryInterceptor(interceptor.Unary()),
 		grpc.StreamInterceptor(interceptor.Stream()),
 	)
-	pb.RegisterTunnelServiceServer(s, &server{})
+	pb.RegisterTunnelServiceServer(s, sconfig)
+
+	debugCtx, debugCancel := context.WithCancel(context.Background())
+	defer debugCancel()
+	go sconfig.debugLogger(debugCtx)
+
 	log.Printf("Listening for connections on TCP port 50051")
 	check(s.Serve(lis))
 }

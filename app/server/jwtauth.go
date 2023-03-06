@@ -43,9 +43,15 @@ func NewJWTInterceptor() *JWTInterceptor {
 
 func IdentityFromContext(ctx context.Context) (string, string) {
 	sessionID := ctx.Value(ContextSessionID)
+	if sessionID == nil {
+		sessionID = ""
+	}
 	agentID := ctx.Value(ContextAgentID)
+	if agentID == nil {
+		agentID = ""
+	}
 
-	return sessionID.(string), agentID.(string)
+	return agentID.(string), sessionID.(string)
 }
 
 func (interceptor *JWTInterceptor) Unary() grpc.UnaryServerInterceptor {
