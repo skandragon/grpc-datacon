@@ -107,6 +107,8 @@ func (s *server) WaitForRequest(ctx context.Context, in *pb.WaitForRequestArgs) 
 }
 
 func main() {
+	ctx := context.Background()
+
 	lis, err := net.Listen("tcp", ":50051")
 	check(err)
 
@@ -125,8 +127,6 @@ func main() {
 		grpc.StreamInterceptor(interceptor.Stream()),
 	)
 	pb.RegisterTunnelServiceServer(s, sconfig)
-
-	ctx := context.Background()
 
 	//debugCtx, debugCancel := context.WithCancel(ctx)
 	//defer debugCancel()
