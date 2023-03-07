@@ -56,7 +56,7 @@ type TunnelServiceClient interface {
 	StartTunnel(ctx context.Context, in *TunnelRequest, opts ...grpc.CallOption) (*TunnelHeaders, error)
 	// The agent will perform a long-running call to WaitForRequest() and handle
 	// any HTTP request found.
-	WaitForRequest(ctx context.Context, in *WaitForRequestArgs, opts ...grpc.CallOption) (*TunnelRequest, error)
+	WaitForRequest(ctx context.Context, in *WaitForRequestArgs, opts ...grpc.CallOption) (TunnelService_WaitForRequestClient, error)
 	// HTTP data, issued from the agent to controller.
 	//
 	// The Send* methods are when the agent is performing the HTTP request, and
@@ -105,17 +105,40 @@ func (c *tunnelServiceClient) StartTunnel(ctx context.Context, in *TunnelRequest
 	return out, nil
 }
 
-func (c *tunnelServiceClient) WaitForRequest(ctx context.Context, in *WaitForRequestArgs, opts ...grpc.CallOption) (*TunnelRequest, error) {
-	out := new(TunnelRequest)
-	err := c.cc.Invoke(ctx, TunnelService_WaitForRequest_FullMethodName, in, out, opts...)
+func (c *tunnelServiceClient) WaitForRequest(ctx context.Context, in *WaitForRequestArgs, opts ...grpc.CallOption) (TunnelService_WaitForRequestClient, error) {
+	stream, err := c.cc.NewStream(ctx, &TunnelService_ServiceDesc.Streams[0], TunnelService_WaitForRequest_FullMethodName, opts...)
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	x := &tunnelServiceWaitForRequestClient{stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type TunnelService_WaitForRequestClient interface {
+	Recv() (*TunnelRequest, error)
+	grpc.ClientStream
+}
+
+type tunnelServiceWaitForRequestClient struct {
+	grpc.ClientStream
+}
+
+func (x *tunnelServiceWaitForRequestClient) Recv() (*TunnelRequest, error) {
+	m := new(TunnelRequest)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 func (c *tunnelServiceClient) SendData(ctx context.Context, opts ...grpc.CallOption) (TunnelService_SendDataClient, error) {
-	stream, err := c.cc.NewStream(ctx, &TunnelService_ServiceDesc.Streams[0], TunnelService_SendData_FullMethodName, opts...)
+	stream, err := c.cc.NewStream(ctx, &TunnelService_ServiceDesc.Streams[1], TunnelService_SendData_FullMethodName, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +181,7 @@ func (c *tunnelServiceClient) SendHeaders(ctx context.Context, in *TunnelHeaders
 }
 
 func (c *tunnelServiceClient) ReceiveData(ctx context.Context, in *ReceiveDataRequest, opts ...grpc.CallOption) (TunnelService_ReceiveDataClient, error) {
-	stream, err := c.cc.NewStream(ctx, &TunnelService_ServiceDesc.Streams[1], TunnelService_ReceiveData_FullMethodName, opts...)
+	stream, err := c.cc.NewStream(ctx, &TunnelService_ServiceDesc.Streams[2], TunnelService_ReceiveData_FullMethodName, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -202,7 +225,7 @@ type TunnelServiceServer interface {
 	StartTunnel(context.Context, *TunnelRequest) (*TunnelHeaders, error)
 	// The agent will perform a long-running call to WaitForRequest() and handle
 	// any HTTP request found.
-	WaitForRequest(context.Context, *WaitForRequestArgs) (*TunnelRequest, error)
+	WaitForRequest(*WaitForRequestArgs, TunnelService_WaitForRequestServer) error
 	// HTTP data, issued from the agent to controller.
 	//
 	// The Send* methods are when the agent is performing the HTTP request, and
@@ -230,8 +253,8 @@ func (UnimplementedTunnelServiceServer) Ping(context.Context, *PingRequest) (*Pi
 func (UnimplementedTunnelServiceServer) StartTunnel(context.Context, *TunnelRequest) (*TunnelHeaders, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method StartTunnel not implemented")
 }
-func (UnimplementedTunnelServiceServer) WaitForRequest(context.Context, *WaitForRequestArgs) (*TunnelRequest, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method WaitForRequest not implemented")
+func (UnimplementedTunnelServiceServer) WaitForRequest(*WaitForRequestArgs, TunnelService_WaitForRequestServer) error {
+	return status.Errorf(codes.Unimplemented, "method WaitForRequest not implemented")
 }
 func (UnimplementedTunnelServiceServer) SendData(TunnelService_SendDataServer) error {
 	return status.Errorf(codes.Unimplemented, "method SendData not implemented")
@@ -309,22 +332,25 @@ func _TunnelService_StartTunnel_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
-func _TunnelService_WaitForRequest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(WaitForRequestArgs)
-	if err := dec(in); err != nil {
-		return nil, err
+func _TunnelService_WaitForRequest_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(WaitForRequestArgs)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
 	}
-	if interceptor == nil {
-		return srv.(TunnelServiceServer).WaitForRequest(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: TunnelService_WaitForRequest_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(TunnelServiceServer).WaitForRequest(ctx, req.(*WaitForRequestArgs))
-	}
-	return interceptor(ctx, in, info, handler)
+	return srv.(TunnelServiceServer).WaitForRequest(m, &tunnelServiceWaitForRequestServer{stream})
+}
+
+type TunnelService_WaitForRequestServer interface {
+	Send(*TunnelRequest) error
+	grpc.ServerStream
+}
+
+type tunnelServiceWaitForRequestServer struct {
+	grpc.ServerStream
+}
+
+func (x *tunnelServiceWaitForRequestServer) Send(m *TunnelRequest) error {
+	return x.ServerStream.SendMsg(m)
 }
 
 func _TunnelService_SendData_Handler(srv interface{}, stream grpc.ServerStream) error {
@@ -412,15 +438,16 @@ var TunnelService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _TunnelService_StartTunnel_Handler,
 		},
 		{
-			MethodName: "WaitForRequest",
-			Handler:    _TunnelService_WaitForRequest_Handler,
-		},
-		{
 			MethodName: "SendHeaders",
 			Handler:    _TunnelService_SendHeaders_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "WaitForRequest",
+			Handler:       _TunnelService_WaitForRequest_Handler,
+			ServerStreams: true,
+		},
 		{
 			StreamName:    "SendData",
 			Handler:       _TunnelService_SendData_Handler,

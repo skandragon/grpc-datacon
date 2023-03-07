@@ -86,15 +86,25 @@ func getHeaderContext(ctx context.Context, timeout time.Duration) (context.Conte
 
 func waitForRequest(ctx context.Context, c pb.TunnelServiceClient) error {
 	ctx, logger := loggerFromContext(ctx)
+	ctx, cancel := getHeaderContext(ctx, 0)
+	defer cancel()
+	stream, err := c.WaitForRequest(ctx, &pb.WaitForRequestArgs{})
+	if err != nil {
+		return err
+	}
 	for {
-		ctx, cancel := getHeaderContext(ctx, 0)
-		defer cancel()
-		resp, err := c.WaitForRequest(ctx, &pb.WaitForRequestArgs{})
+		req, err := stream.Recv()
 		if err != nil {
 			return err
 		}
-		logger.Infow("waitForRequest response", "uri", resp.URI, "bodyLength", len(resp.Body), "method", resp.Method, "serviceName", resp.Name, "streamID", resp.StreamId)
-		go dispatchRequest(ctx, c, resp)
+		logger.Infow("waitForRequest response",
+			"streamID", req.StreamId,
+			"method", req.Method,
+			"serviceName", req.Name,
+			"serviceType", req.Type,
+			"uri", req.URI,
+			"bodyLength", len(req.Body))
+		go dispatchRequest(ctx, c, req)
 	}
 }
 
@@ -131,10 +141,15 @@ func sendErrorHeaders(ctx context.Context, c pb.TunnelServiceClient, streamID st
 func sendHeaders(ctx context.Context, c pb.TunnelServiceClient, streamID string, resp *http.Response) error {
 	ctx, cancel := getHeaderContext(ctx, session.rpcTimeout)
 	defer cancel()
+
+	headers := []*pb.HttpHeader{}
+	for k, v := range resp.Header {
+		headers = append(headers, &pb.HttpHeader{Name: k, Values: v})
+	}
 	_, err := c.SendHeaders(ctx, &pb.TunnelHeaders{
-		StreamId: streamID,
-		Status:   int32(resp.StatusCode),
-		// TODO: add headers
+		StreamId:      streamID,
+		Status:        int32(resp.StatusCode),
+		Headers:       headers,
 		ContentLength: resp.ContentLength,
 	})
 	return err

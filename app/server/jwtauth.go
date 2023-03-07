@@ -71,6 +71,10 @@ type serverStream struct {
 	ctx context.Context
 }
 
+func (ss *serverStream) Context() context.Context {
+	return ss.ctx
+}
+
 func (interceptor *JWTInterceptor) Stream() grpc.StreamServerInterceptor {
 	return func(srv interface{}, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		ctx := stream.Context()
@@ -78,8 +82,8 @@ func (interceptor *JWTInterceptor) Stream() grpc.StreamServerInterceptor {
 		if err != nil {
 			return err
 		}
-		ctx = context.WithValue(ctx, "agentID", agentID)
-		ctx = context.WithValue(ctx, "sessionID", sessionID)
+		ctx = context.WithValue(ctx, ContextAgentID, agentID)
+		ctx = context.WithValue(ctx, ContextSessionID, sessionID)
 		return handler(srv, &serverStream{ServerStream: stream, ctx: ctx})
 	}
 }

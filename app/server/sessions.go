@@ -87,7 +87,6 @@ func (s *server) removeAgentSession(session *agentContext) {
 func (s *server) removeAgentSessionUnlocked(session *agentContext) {
 	key := agentKey{agentID: session.agentID, sessionID: session.sessionID}
 	delete(s.agents, key)
-	close(session.out)
 }
 
 func (s *server) touchSession(session *agentContext, t int64) {

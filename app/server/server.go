@@ -29,10 +29,10 @@ import (
 )
 
 type server struct {
+	pb.UnimplementedTunnelServiceServer
 	sync.Mutex
 	agentIdleTimeout int64
-	pb.UnimplementedTunnelServiceServer
-	agents map[agentKey]*agentContext
+	agents           map[agentKey]*agentContext
 }
 
 func (s *server) Hello(ctx context.Context, in *pb.HelloRequest) (*pb.HelloResponse, error) {
@@ -61,22 +61,30 @@ func (s *server) Ping(ctx context.Context, in *pb.PingRequest) (*pb.PingResponse
 	return r, nil
 }
 
-func (s *server) WaitForRequest(ctx context.Context, in *pb.WaitForRequestArgs) (*pb.TunnelRequest, error) {
-	session, err := s.findAgentSessionContext(ctx)
-	if err != nil {
-		return nil, status.Error(codes.FailedPrecondition, "Hello must be called first")
-	}
-	ctx, logger := loggerFromContext(ctx)
+func (s *server) WaitForRequest(in *pb.WaitForRequestArgs, stream pb.TunnelService_WaitForRequestServer) error {
+	ctx, logger := loggerFromContext(stream.Context())
 	logger.Infof("WaitForRequest")
+	session, err := s.findAgentSessionContext(stream.Context())
+	if err != nil {
+		return status.Error(codes.FailedPrecondition, "Hello must be called first")
+	}
 
-	select {
-	case <-ctx.Done():
-		logger.Infow("closed connection")
-		s.removeAgentSession(session)
-		return nil, status.Error(codes.Canceled, "client closed connection")
-	case r := <-session.out:
-		logger.Infof("request: %v", r)
-		return r, nil
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Infow("closed connection")
+			s.removeAgentSession(session)
+			return status.Error(codes.Canceled, "client closed connection")
+		case r := <-session.out:
+			logger.Infow("->TunnelRequest",
+				"streamID", r.StreamId,
+				"method", r.Method,
+				"serviceName", r.Name,
+				"serviceType", r.Type,
+				"uri", r.URI,
+				"bodyLength", len(r.Body))
+			stream.Send(r)
+		}
 	}
 }
 
@@ -88,4 +96,24 @@ func (s *server) SendHeaders(ctx context.Context, in *pb.TunnelHeaders) (*pb.Sen
 	}
 	logger.Infow("SendHeaders", "contentLength", in.ContentLength, "headersLength", len(in.Headers))
 	return &pb.SendHeadersResponse{}, nil
+}
+
+func (s *server) SendData(stream pb.TunnelService_SendDataServer) error {
+	var logger *zap.SugaredLogger
+	for {
+		data, err := stream.Recv()
+		if err != nil {
+			_, logger = loggerFromContext(stream.Context(), zap.String("streamID", "--UNKNOWN--"))
+			logger.Warnw("SendData", "error", err)
+			return err
+		}
+		if logger == nil {
+			_, logger = loggerFromContext(stream.Context(), zap.String("streamID", data.StreamId))
+		}
+		if len(data.Data) == 0 {
+			logger.Infow("SendData stream ended with length 0 (EOF)")
+			return nil
+		}
+		logger.Infow("SendData", "dataLength", len(data.Data))
+	}
 }

@@ -112,7 +112,7 @@ service TunnelService {
 
     // The agent will perform a long-running call to WaitForRequest() and handle
     // any HTTP request found.
-    rpc WaitForRequest(WaitForRequestArgs) returns (TunnelRequest) {}
+    rpc WaitForRequest(WaitForRequestArgs) returns (stream TunnelRequest) {}
 
     // HTTP data, issued from the agent to controller.
     //
