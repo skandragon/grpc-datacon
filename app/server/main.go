@@ -18,16 +18,13 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"net"
 	"sync"
 	"time"
 
-	"github.com/skandragon/grpc-datacon/internal/logging"
 	pb "github.com/skandragon/grpc-datacon/internal/tunnel"
 	"github.com/skandragon/grpc-datacon/internal/ulid"
-	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/keepalive"
@@ -51,87 +48,11 @@ var kasp = keepalive.ServerParameters{
 	Timeout:           10 * time.Second,
 }
 
-type agentContext struct {
-	agentKey
-	in       chan string
-	out      chan string
-	lastUsed int64
-}
-
-type agentKey struct {
-	agentID   string
-	sessionID string
-}
-
-func newAgentContext(agentID string, sessionID string) (*agentContext, agentKey) {
-	key := agentKey{agentID: agentID, sessionID: sessionID}
-	session := &agentContext{
-		agentKey: key,
-		in:       make(chan string),
-		out:      make(chan string),
-		lastUsed: time.Now().UnixNano(),
-	}
-	return session, key
-}
-
 type server struct {
 	sync.Mutex
+	agentIdleTimeout int64
 	pb.UnimplementedTunnelServiceServer
 	agents map[agentKey]*agentContext
-}
-
-func (s *server) findAgentSessionContext(ctx context.Context) (*agentContext, error) {
-	s.Lock()
-	defer s.Unlock()
-	agentID, sessionID := IdentityFromContext(ctx)
-	key := agentKey{agentID: agentID, sessionID: sessionID}
-	if session, found := s.agents[key]; found {
-		return session, nil
-	}
-	return nil, fmt.Errorf("no such agent session connected: %s/%s", agentID, sessionID)
-}
-
-func loggerFromContext(ctx context.Context) (context.Context, *zap.SugaredLogger) {
-	fields := []zap.Field{}
-	agentID, sessionID := IdentityFromContext(ctx)
-	if agentID != "" {
-		fields = append(fields, zap.String("agentID", agentID))
-	}
-	if sessionID != "" {
-		fields = append(fields, zap.String("sessionID", sessionID))
-	}
-	ctx = logging.NewContext(ctx, fields...)
-	return ctx, logging.WithContext(ctx).Sugar()
-}
-
-func (s *server) registerAgentSession(agentID string, sessionID string) *agentContext {
-	s.Lock()
-	defer s.Unlock()
-	session, key := newAgentContext(agentID, sessionID)
-	s.agents[key] = session
-	return session
-}
-
-func (s *server) debugPrintSessions(ctx context.Context) {
-	_, logger := loggerFromContext(ctx)
-	s.Lock()
-	defer s.Unlock()
-	for key := range s.agents {
-		logger.Infof("agentID %s, sessionID %s", key.agentID, key.sessionID)
-	}
-}
-
-func (s *server) removeAgentSession(session *agentContext) {
-	s.Lock()
-	defer s.Unlock()
-	key := agentKey{agentID: session.agentID, sessionID: session.sessionID}
-	delete(s.agents, key)
-}
-
-func (s *server) touchSession(session *agentContext, t int64) {
-	s.Lock()
-	defer s.Unlock()
-	s.agents[session.agentKey].lastUsed = t
 }
 
 func (s *server) Hello(ctx context.Context, in *pb.HelloRequest) (*pb.HelloResponse, error) {
@@ -185,48 +106,15 @@ func (s *server) WaitForRequest(ctx context.Context, in *pb.WaitForRequestArgs) 
 	}
 }
 
-func (s *server) debugLogger(ctx context.Context) {
-	ctx, logger := loggerFromContext(ctx)
-	t := time.NewTicker(10 * time.Second)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			logger.Infof("sessions:")
-			s.debugPrintSessions(ctx)
-		}
-	}
-}
-
-func (s *server) checkSessionTimeouts(ctx context.Context) {
-	t := time.NewTicker(10 * time.Second)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			now := time.Now().UnixNano()
-			s.expireOldSessions(ctx, now)
-		}
-	}
-}
-
-func (s *server) expireOldSessions(ctx context.Context, now int64) {
-	s.Lock()
-	defer s.Unlock()
-
-	// TODO: check times
-}
-
 func main() {
 	lis, err := net.Listen("tcp", ":50051")
 	check(err)
 
+	idleTimeout := 60 * time.Second
+
 	sconfig := &server{
-		agents: map[agentKey]*agentContext{},
+		agentIdleTimeout: idleTimeout.Nanoseconds(),
+		agents:           map[agentKey]*agentContext{},
 	}
 
 	interceptor := NewJWTInterceptor()
@@ -238,9 +126,15 @@ func main() {
 	)
 	pb.RegisterTunnelServiceServer(s, sconfig)
 
-	debugCtx, debugCancel := context.WithCancel(context.Background())
-	defer debugCancel()
-	go sconfig.debugLogger(debugCtx)
+	ctx := context.Background()
+
+	//debugCtx, debugCancel := context.WithCancel(ctx)
+	//defer debugCancel()
+	//go sconfig.debugLogger(debugCtx)
+
+	cleanerCtx, cleanerCancel := context.WithCancel(ctx)
+	defer cleanerCancel()
+	go sconfig.checkSessionTimeouts(cleanerCtx)
 
 	log.Printf("Listening for connections on TCP port 50051")
 	check(s.Serve(lis))
