@@ -20,15 +20,12 @@ import (
 	"context"
 	"log"
 	"net"
-	"sync"
 	"time"
 
 	pb "github.com/skandragon/grpc-datacon/internal/tunnel"
 	"github.com/skandragon/grpc-datacon/internal/ulid"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/keepalive"
-	"google.golang.org/grpc/status"
 )
 
 func check(err error) {
@@ -48,61 +45,41 @@ var kasp = keepalive.ServerParameters{
 	Timeout:           10 * time.Second,
 }
 
-type server struct {
-	sync.Mutex
-	agentIdleTimeout int64
-	pb.UnimplementedTunnelServiceServer
-	agents map[agentKey]*agentContext
+// get a random session
+func (s *server) getRandomSession() *agentContext {
+	s.Lock()
+	defer s.Unlock()
+	for _, session := range s.agents {
+		return session
+	}
+	return nil
 }
 
-func (s *server) Hello(ctx context.Context, in *pb.HelloRequest) (*pb.HelloResponse, error) {
-	agentID, _ := IdentityFromContext(ctx)
-	_, logger := loggerFromContext(ctx)
-	logger.Infof("Hello")
-	session := s.registerAgentSession(agentID, ulid.GlobalContext.Ulid())
-	return &pb.HelloResponse{
-		InstanceId: session.sessionID,
-	}, nil
+// fake a http request to some random agent
+func (s *server) randomRequest(ctx context.Context) {
+	session := s.getRandomSession()
+	if session == nil {
+		return
+	}
+	session.out <- &pb.TunnelRequest{
+		StreamId: ulid.GlobalContext.Ulid(),
+		Name:     "bobService",
+		Type:     "bobServiceType",
+		Method:   "GET",
+		URI:      "http://blog.flame.org/",
+	}
 }
 
-func (s *server) Ping(ctx context.Context, in *pb.PingRequest) (*pb.PingResponse, error) {
-	_, logger := loggerFromContext(ctx)
-	session, err := s.findAgentSessionContext(ctx)
-	if err != nil {
-		return nil, status.Error(codes.FailedPrecondition, "Hello must be called first")
-	}
-	now := time.Now().UnixNano()
-	s.touchSession(session, now)
-	logger.Infof("Ping")
-	r := &pb.PingResponse{
-		Ts:       uint64(now),
-		EchoedTs: in.Ts,
-	}
-	return r, nil
-}
+func (s *server) requestOnTimer(ctx context.Context) {
+	t := time.NewTicker(10 * time.Second)
 
-func (s *server) WaitForRequest(ctx context.Context, in *pb.WaitForRequestArgs) (*pb.TunnelRequest, error) {
-	t := time.NewTicker(60 * time.Second)
-	session, err := s.findAgentSessionContext(ctx)
-	if err != nil {
-		return nil, status.Error(codes.FailedPrecondition, "Hello must be called first")
-	}
-	ctx, logger := loggerFromContext(ctx)
-	logger.Infof("WaitForRequest")
-
-	select {
-	case <-ctx.Done():
-		logger.Infow("closed connection")
-		s.removeAgentSession(session)
-		return nil, status.Error(codes.Canceled, "client closed connection")
-	case <-t.C:
-		return &pb.TunnelRequest{
-			StreamId: ulid.GlobalContext.Ulid(),
-			Name:     "bob",
-			Type:     "smith",
-			Method:   "GET",
-			URI:      "/foobar",
-		}, nil
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.randomRequest(ctx)
+		}
 	}
 }
 
@@ -135,6 +112,10 @@ func main() {
 	cleanerCtx, cleanerCancel := context.WithCancel(ctx)
 	defer cleanerCancel()
 	go sconfig.checkSessionTimeouts(cleanerCtx)
+
+	requesterCtx, requesterCancel := context.WithCancel(ctx)
+	defer requesterCancel()
+	go sconfig.requestOnTimer(requesterCtx)
 
 	log.Printf("Listening for connections on TCP port 50051")
 	check(s.Serve(lis))

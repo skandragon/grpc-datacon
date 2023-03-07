@@ -22,13 +22,13 @@ import (
 	"time"
 
 	"github.com/skandragon/grpc-datacon/internal/logging"
+	pb "github.com/skandragon/grpc-datacon/internal/tunnel"
 	"go.uber.org/zap"
 )
 
 type agentContext struct {
 	agentKey
-	in       chan string
-	out      chan string
+	out      chan *pb.TunnelRequest
 	lastUsed int64
 }
 
@@ -41,8 +41,7 @@ func newAgentContext(agentID string, sessionID string) (*agentContext, agentKey)
 	key := agentKey{agentID: agentID, sessionID: sessionID}
 	session := &agentContext{
 		agentKey: key,
-		in:       make(chan string),
-		out:      make(chan string),
+		out:      make(chan *pb.TunnelRequest),
 		lastUsed: time.Now().UnixNano(),
 	}
 	return session, key
@@ -59,8 +58,7 @@ func (s *server) findAgentSessionContext(ctx context.Context) (*agentContext, er
 	return nil, fmt.Errorf("no such agent session connected: %s/%s", agentID, sessionID)
 }
 
-func loggerFromContext(ctx context.Context) (context.Context, *zap.SugaredLogger) {
-	fields := []zap.Field{}
+func loggerFromContext(ctx context.Context, fields ...zap.Field) (context.Context, *zap.SugaredLogger) {
 	agentID, sessionID := IdentityFromContext(ctx)
 	if agentID != "" {
 		fields = append(fields, zap.String("agentID", agentID))
@@ -89,7 +87,6 @@ func (s *server) removeAgentSession(session *agentContext) {
 func (s *server) removeAgentSessionUnlocked(session *agentContext) {
 	key := agentKey{agentID: session.agentID, sessionID: session.sessionID}
 	delete(s.agents, key)
-	close(session.in)
 	close(session.out)
 }
 

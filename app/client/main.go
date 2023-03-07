@@ -17,8 +17,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"log"
+	"net/http"
 	"time"
 
 	"github.com/skandragon/grpc-datacon/internal/logging"
@@ -90,7 +93,8 @@ func waitForRequest(ctx context.Context, c pb.TunnelServiceClient) error {
 		if err != nil {
 			return err
 		}
-		logger.Infof("waitForRequest response: %#v", resp)
+		logger.Infow("waitForRequest response", "uri", resp.URI, "bodyLength", len(resp.Body), "method", resp.Method, "serviceName", resp.Name, "streamID", resp.StreamId)
+		go dispatchRequest(ctx, c, resp)
 	}
 }
 
@@ -107,6 +111,79 @@ func pinger(ctx context.Context, c pb.TunnelServiceClient) error {
 			return err
 		}
 		logger.Infof("Got ping repsonse: servertime=%d, mytime=%d", r.Ts, r.EchoedTs)
+	}
+}
+
+func sendErrorHeaders(ctx context.Context, c pb.TunnelServiceClient, streamID string) {
+	ctx, logger := loggerFromContext(ctx)
+	ctx, cancel := getHeaderContext(ctx, session.rpcTimeout)
+	defer cancel()
+	_, err := c.SendHeaders(ctx, &pb.TunnelHeaders{
+		StreamId:      streamID,
+		ContentLength: 0,
+		Status:        http.StatusBadRequest,
+	})
+	if err != nil {
+		logger.Errorw("unable to SendHeaders", "error", err)
+	}
+}
+
+func sendHeaders(ctx context.Context, c pb.TunnelServiceClient, streamID string, resp *http.Response) error {
+	ctx, cancel := getHeaderContext(ctx, session.rpcTimeout)
+	defer cancel()
+	_, err := c.SendHeaders(ctx, &pb.TunnelHeaders{
+		StreamId: streamID,
+		Status:   int32(resp.StatusCode),
+		// TODO: add headers
+		ContentLength: resp.ContentLength,
+	})
+	return err
+}
+
+func sendBody(ctx context.Context, c pb.TunnelService_SendDataClient, streamID string, data []byte) error {
+	return c.Send(&pb.Data{
+		StreamId: streamID,
+		Data:     data,
+	})
+}
+
+func dispatchRequest(ctx context.Context, c pb.TunnelServiceClient, req *pb.TunnelRequest) {
+	ctx, logger := loggerFromContext(ctx)
+	hr, err := http.NewRequestWithContext(ctx, req.Method, req.URI, bytes.NewReader(req.Body))
+	if err != nil {
+		logger.Warnw("dispatchRequest NewRequestWithContext", "error", err)
+		sendErrorHeaders(ctx, c, req.StreamId)
+		return
+	}
+
+	resp, err := http.DefaultClient.Do(hr)
+	if err != nil {
+		logger.Warnw("dispatchRequest NewRequestWithContext", "error", err)
+		sendErrorHeaders(ctx, c, req.StreamId)
+		return
+	}
+	defer resp.Body.Close()
+
+	sendHeaders(ctx, c, req.StreamId, resp)
+
+	stream, err := c.SendData(ctx)
+	if err != nil {
+		logger.Errorw("SendData()", "error", err)
+		return
+	}
+
+	body, err := io.ReadAll(hr.Body)
+	if err != nil {
+		if err := sendBody(ctx, stream, req.StreamId, []byte{}); err != nil {
+			logger.Errorw("sendBody(EOF)", "error", err)
+		}
+		return
+	}
+	if err := sendBody(ctx, stream, req.StreamId, body); err != nil {
+		logger.Errorw("sendBody(with body)", "error", err)
+	}
+	if err := sendBody(ctx, stream, req.StreamId, []byte{}); err != nil {
+		logger.Errorw("sendBody(EOF)", "error", err)
 	}
 }
 

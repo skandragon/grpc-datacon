@@ -49,7 +49,7 @@ message HelloResponse {
 
 message Data {
     string streamId = 1;
-    bytes body = 3;
+    bytes data = 3;
 }
 
 message SendDataResponse {}
@@ -58,7 +58,7 @@ message TunnelHeaders {
     string streamId = 1;
     int32 status = 3;
     repeated HttpHeader headers = 4;
-    optional int64 contentLength = 5;
+    int64 contentLength = 5;
 }
 
 message HttpHeader {
