@@ -95,31 +95,6 @@ func (s *server) touchSession(session *agentContext, t int64) {
 	s.agents[session.agentKey].lastUsed = t
 }
 
-func (s *server) debugPrintSessions(ctx context.Context) {
-	_, logger := loggerFromContext(ctx)
-	now := time.Now().UnixNano()
-	s.Lock()
-	defer s.Unlock()
-	for _, session := range s.agents {
-		logger.Infof("agentID %s, sessionID %s, idleTime %d", session.agentID, session.sessionID, (now-session.lastUsed)/1000000)
-	}
-}
-
-func (s *server) debugLogger(ctx context.Context) {
-	ctx, logger := loggerFromContext(ctx)
-	t := time.NewTicker(10 * time.Second)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			logger.Infof("sessions:")
-			s.debugPrintSessions(ctx)
-		}
-	}
-}
-
 func (s *server) checkSessionTimeouts(ctx context.Context) {
 	t := time.NewTicker(10 * time.Second)
 

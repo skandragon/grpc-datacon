@@ -73,12 +73,12 @@ func (s *server) WaitForRequest(in *pb.WaitForRequestArgs, stream pb.TunnelServi
 	if err != nil {
 		return status.Error(codes.FailedPrecondition, "Hello must be called first")
 	}
+	defer s.removeAgentSession(session)
 
 	for {
 		select {
 		case <-ctx.Done():
 			logger.Infow("closed connection")
-			s.removeAgentSession(session)
 			return status.Error(codes.Canceled, "client closed connection")
 		case r := <-session.out:
 			logger.Infow("->TunnelRequest",
@@ -88,7 +88,10 @@ func (s *server) WaitForRequest(in *pb.WaitForRequestArgs, stream pb.TunnelServi
 				"serviceType", r.Type,
 				"uri", r.URI,
 				"bodyLength", len(r.Body))
-			stream.Send(r)
+			if err := stream.Send(r); err != nil {
+				logger.Errorw("WaitForRequest stream.Send() failed, dropping agent", "error", err)
+				return status.Error(codes.Canceled, "send failed")
+			}
 		}
 	}
 }

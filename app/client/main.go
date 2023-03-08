@@ -50,7 +50,7 @@ const (
 )
 
 var (
-	tickTime   = flag.Int("tickTime", 30, "Time between sending Ping messages")
+	tickTime   = flag.Int("tickTime", 10, "Time between sending Ping messages")
 	configFile = flag.String("configFile", "/app/config/config.yaml", "The file with the controller config")
 
 	// eg, http://localhost:14268/api/traces
@@ -89,11 +89,13 @@ var session = AgentSession{
 	done:          make(chan struct{}),
 }
 
-func sendHello(ctx context.Context, c pb.TunnelServiceClient) (*pb.HelloResponse, error) {
+func sendHello(ctx context.Context, c pb.TunnelServiceClient, hostname string, version string) (*pb.HelloResponse, error) {
 	ctx, cancel := getHeaderContext(ctx, session.rpcTimeout)
 	defer cancel()
 
 	req := &pb.HelloRequest{
+		Hostname: hostname,
+		Version:  version,
 		Annotations: []*pb.Annotation{
 			{
 				Name:  "mode",
@@ -142,10 +144,10 @@ func waitForRequest(ctx context.Context, c pb.TunnelServiceClient) error {
 	}
 }
 
-func pinger(ctx context.Context, c pb.TunnelServiceClient) error {
+func pinger(ctx context.Context, c pb.TunnelServiceClient, tickTime int) error {
 	ctx, logger := loggerFromContext(ctx)
 	for {
-		time.Sleep(10 * time.Second)
+		time.Sleep(time.Duration(tickTime) * time.Second)
 		ctx, cancel := getHeaderContext(ctx, session.rpcTimeout)
 		defer cancel()
 		r, err := c.Ping(ctx, &pb.PingRequest{
@@ -213,7 +215,11 @@ func dispatchRequest(ctx context.Context, c pb.TunnelServiceClient, req *pb.Tunn
 	}
 	defer resp.Body.Close()
 
-	sendHeaders(ctx, c, req.StreamId, resp)
+	err = sendHeaders(ctx, c, req.StreamId, resp)
+	if err != nil {
+		logger.Errorw("dispatchRequest sendHeaders failed", "error", err)
+		return
+	}
 
 	stream, err := c.SendData(ctx)
 	if err != nil {
@@ -378,7 +384,7 @@ func main() {
 	defer conn.Close()
 	c := pb.NewTunnelServiceClient(conn)
 
-	hello, err := sendHello(ctx, c)
+	hello, err := sendHello(ctx, c, hostname, version.VersionString())
 	check(ctx, err)
 	session.sessionID = hello.InstanceId
 
@@ -389,13 +395,10 @@ func main() {
 	}()
 
 	go func() {
-		err := pinger(ctx, c)
+		err := pinger(ctx, c, *tickTime)
 		log.Printf("pinger failed: %v", err)
 		session.done <- struct{}{}
 	}()
 
-	select {
-	case <-session.done:
-		return
-	}
+	<-session.done
 }

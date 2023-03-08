@@ -67,12 +67,6 @@ var (
 	//endpoints     []serviceconfig.ConfiguredEndpoint
 )
 
-func check(err error) {
-	if err != nil {
-		log.Fatal(err)
-	}
-}
-
 var kaep = keepalive.EnforcementPolicy{
 	MinTime:             5 * time.Second,
 	PermitWithoutStream: true,
