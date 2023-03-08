@@ -19,18 +19,52 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
+	"flag"
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"runtime"
+	"strings"
 	"time"
 
+	"github.com/OpsMx/go-app-base/tracer"
+	"github.com/OpsMx/go-app-base/util"
+	"github.com/OpsMx/go-app-base/version"
+	"github.com/skandragon/grpc-datacon/internal/ca"
 	"github.com/skandragon/grpc-datacon/internal/logging"
+	"github.com/skandragon/grpc-datacon/internal/secrets"
 	pb "github.com/skandragon/grpc-datacon/internal/tunnel"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
+)
+
+const (
+	appName = "agent-client"
+)
+
+var (
+	tickTime   = flag.Int("tickTime", 30, "Time between sending Ping messages")
+	configFile = flag.String("configFile", "/app/config/config.yaml", "The file with the controller config")
+
+	// eg, http://localhost:14268/api/traces
+	jaegerEndpoint = flag.String("jaeger-endpoint", "", "Jaeger collector endpoint")
+	traceToStdout  = flag.Bool("traceToStdout", false, "log traces to stdout")
+	traceRatio     = flag.Float64("traceRatio", 0.01, "ratio of traces to create, if incoming request is not traced")
+	showversion    = flag.Bool("version", false, "show the version and exit")
+
+	config         *agentConfig
+	tracerProvider *tracer.TracerProvider
+
+	hostname = getHostname()
+
+	secretsLoader secrets.SecretLoader
 )
 
 func check(ctx context.Context, err error) {
@@ -202,15 +236,17 @@ func dispatchRequest(ctx context.Context, c pb.TunnelServiceClient, req *pb.Tunn
 	}
 }
 
-func connect(ctx context.Context, address string) *grpc.ClientConn {
+func connect(ctx context.Context, address string, ta credentials.TransportCredentials) *grpc.ClientConn {
 	kparams := keepalive.ClientParameters{
 		Time:                10 * time.Second,
 		Timeout:             5 * time.Second,
 		PermitWithoutStream: true,
 	}
 	gopts := []grpc.DialOption{
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(ta),
 		grpc.WithKeepaliveParams(kparams),
+		grpc.WithBlock(),
+		grpc.WithReturnConnectionError(),
 	}
 	conn, err := grpc.Dial(address, gopts...)
 	check(ctx, err)
@@ -229,10 +265,116 @@ func loggerFromContext(ctx context.Context) (context.Context, *zap.SugaredLogger
 	return ctx, logging.WithContext(ctx).Sugar()
 }
 
-func main() {
-	ctx := context.Background()
+func loadCACertPEM(ctx context.Context) []byte {
+	_, logger := loggerFromContext(ctx)
+	cert, err := os.ReadFile(config.CACertPath)
+	if err != nil {
+		logger.Fatalw("Unable to load CA cert", "filename", config.CACertPath)
+	}
+	return cert
+}
 
-	conn := connect(ctx, "localhost:50051")
+func loadCACert(ctx context.Context) []byte {
+	_, logger := loggerFromContext(ctx)
+	certPEM := loadCACertPEM(ctx)
+
+	block, _ := pem.Decode([]byte(certPEM))
+	if block == nil {
+		logger.Fatal("failed to parse certificate PEM")
+	}
+
+	err := ca.ValidateCACert(block.Bytes)
+	if err != nil {
+		logger.Fatalf("Bad CA cert: %v", err)
+	}
+
+	return certPEM
+}
+
+func getHostname() string {
+	hn, err := os.Hostname()
+	if err != nil {
+		return "unknown"
+	}
+	return hn
+}
+
+func getAuthToken(filename string) (string, error) {
+	if token, ok := os.LookupEnv("AUTH_TOKEN"); ok {
+		return token, nil
+	}
+	f, err := os.Open(filename)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	token, err := io.ReadAll(f)
+	if err != nil {
+		return "", err
+	}
+	ret := strings.TrimSpace(string(token))
+	ret = strings.ReplaceAll(ret, "\n\r", "")
+	return ret, nil
+}
+
+func main() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ctx, logger := loggerFromContext(ctx)
+
+	logger.Infof("%s", version.VersionString())
+	flag.Parse()
+	if *showversion {
+		os.Exit(0)
+	}
+
+	logger.Infow("agent starting",
+		"version", version.VersionString(),
+		"os", runtime.GOOS,
+		"arch", runtime.GOARCH,
+		"cores", runtime.NumCPU(),
+	)
+
+	var err error
+	tracerProvider, err = tracer.NewTracerProvider(*jaegerEndpoint, *traceToStdout, version.GitHash(), appName, *traceRatio)
+	util.Check(err)
+	defer tracerProvider.Shutdown(ctx)
+
+	if c, err := loadConfig(*configFile); err != nil {
+		logger.Fatalf("loading config: %v", err)
+	} else {
+		config = c
+	}
+	logger.Infow("config", "controllerHostname", config.ControllerHostname)
+
+	authToken, err := getAuthToken(config.AuthTokenPath)
+	if err != nil {
+		logger.Error(err)
+	}
+	session.authorization = authToken
+
+	namespace, ok := os.LookupEnv("POD_NAMESPACE")
+	if ok {
+		secretsLoader, err = secrets.MakeKubernetesSecretLoader(namespace)
+		if err != nil {
+			logger.Fatalf("loading Kubernetes secrets: %v", err)
+		}
+	} else {
+		logger.Info("POD_NAMESPACE not set.  Disabling Kubernetes secret handling.")
+	}
+
+	caCertPool := x509.NewCertPool()
+	cacert := loadCACert(ctx)
+	if ok := caCertPool.AppendCertsFromPEM(cacert); !ok {
+		logger.Fatalf("append certificate to pool: %v", err)
+	}
+
+	ta := credentials.NewTLS(&tls.Config{
+		RootCAs: caCertPool,
+	})
+
+	conn := connect(ctx, "localhost:8003", ta)
 	defer conn.Close()
 	c := pb.NewTunnelServiceClient(conn)
 

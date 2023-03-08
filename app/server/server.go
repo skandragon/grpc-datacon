@@ -18,13 +18,18 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"fmt"
+	"net"
 	"sync"
 	"time"
 
 	pb "github.com/skandragon/grpc-datacon/internal/tunnel"
 	"github.com/skandragon/grpc-datacon/internal/ulid"
 	"go.uber.org/zap"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 )
 
@@ -115,5 +120,54 @@ func (s *server) SendData(stream pb.TunnelService_SendDataServer) error {
 			return nil
 		}
 		logger.Infow("SendData", "dataLength", len(data.Data))
+	}
+}
+
+func runAgentGRPCServer(ctx context.Context, useTLS bool, serverCert *tls.Certificate) {
+	ctx, logger := loggerFromContext(ctx, zap.String("component", "grpcServer"))
+	logger.Infow("starting agent GRPC server", "port", config.AgentListenPort)
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", config.AgentListenPort))
+	if err != nil {
+		logger.Fatalw("failed to listen on agent port", "error", err)
+	}
+
+	idleTimeout := 60 * time.Second
+
+	sconfig := &server{
+		agentIdleTimeout: idleTimeout.Nanoseconds(),
+		agents:           map[agentKey]*agentContext{},
+	}
+
+	cleanerCtx, cleanerCancel := context.WithCancel(ctx)
+	defer cleanerCancel()
+	go sconfig.checkSessionTimeouts(cleanerCtx)
+
+	requesterCtx, requesterCancel := context.WithCancel(ctx)
+	defer requesterCancel()
+	go sconfig.requestOnTimer(requesterCtx)
+
+	certPool, err := authority.MakeCertPool()
+	if err != nil {
+		logger.Fatalw("authority.MakeCertPool", "error", err)
+	}
+	creds := credentials.NewTLS(&tls.Config{
+		ClientCAs:    certPool,
+		ClientAuth:   tls.NoClientCert,
+		Certificates: []tls.Certificate{*serverCert},
+		MinVersion:   tls.VersionTLS13,
+	})
+	opts := []grpc.ServerOption{grpc.Creds(creds)}
+	grpcServer := grpc.NewServer(opts...)
+
+	interceptor := NewJWTInterceptor()
+	s := grpc.NewServer(
+		grpc.KeepaliveEnforcementPolicy(kaep),
+		grpc.KeepaliveParams(kasp),
+		grpc.UnaryInterceptor(interceptor.Unary()),
+		grpc.StreamInterceptor(interceptor.Stream()),
+	)
+	pb.RegisterTunnelServiceServer(s, sconfig)
+	if err := grpcServer.Serve(lis); err != nil {
+		logger.Fatalw("grpcServer.Serve() failed", "error", err)
 	}
 }
