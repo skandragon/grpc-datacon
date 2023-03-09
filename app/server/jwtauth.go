@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/skandragon/grpc-datacon/internal/jwtutil"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -99,6 +100,11 @@ func (interceptor *JWTInterceptor) authorize(ctx context.Context) (string, strin
 		return "", "", status.Errorf(codes.Unauthenticated, "authorization header missing or invalid")
 	}
 
+	agentID, err := jwtutil.ValidateAgentJWT(authorizationValues[0], nil)
+	if err != nil {
+		return "", "", status.Errorf(codes.Unauthenticated, "cannot validate JWT")
+	}
+
 	// TODO: check JWT, extract agent
 
 	sessionValues := md["x-session-id"]
@@ -107,5 +113,5 @@ func (interceptor *JWTInterceptor) authorize(ctx context.Context) (string, strin
 		sessionID = sessionValues[0]
 	}
 
-	return "TODO-smith", sessionID, nil
+	return agentID, sessionID, nil
 }

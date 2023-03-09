@@ -363,6 +363,12 @@ func main() {
 
 	go runPrometheusHTTPServer(config.PrometheusListenPort)
 
+	agentJWT, err := jwtutil.MakeAgentJWT("smith", nil)
+	if err != nil {
+		logger.Fatalf("cannot make sample agent JWT")
+	}
+	logger.Infow("sample agent JWT", "jwt", agentJWT, "name", "smith")
+
 	<-sigchan
 	log.Printf("Exiting Cleanly")
 }

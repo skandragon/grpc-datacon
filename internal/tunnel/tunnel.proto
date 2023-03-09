@@ -41,6 +41,7 @@ message HelloRequest {
 }
 
 message HelloResponse {
+    string agentId = 1;
     string instanceId = 2;
     repeated EndpointHealth endpoints = 3;
     string version = 4;

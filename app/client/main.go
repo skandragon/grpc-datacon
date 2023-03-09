@@ -38,6 +38,7 @@ import (
 	"github.com/skandragon/grpc-datacon/internal/ca"
 	"github.com/skandragon/grpc-datacon/internal/logging"
 	"github.com/skandragon/grpc-datacon/internal/secrets"
+	"github.com/skandragon/grpc-datacon/internal/serviceconfig"
 	pb "github.com/skandragon/grpc-datacon/internal/tunnel"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -60,12 +61,12 @@ var (
 	traceRatio     = flag.Float64("traceRatio", 0.01, "ratio of traces to create, if incoming request is not traced")
 	showversion    = flag.Bool("version", false, "show the version and exit")
 
-	config         *agentConfig
-	tracerProvider *tracer.TracerProvider
-
 	hostname = getHostname()
 
-	secretsLoader secrets.SecretLoader
+	config         *agentConfig
+	tracerProvider *tracer.TracerProvider
+	secretsLoader  secrets.SecretLoader
+	endpoints      serviceconfig.ServiceConfig
 )
 
 func check(ctx context.Context, err error) {
@@ -84,10 +85,8 @@ type AgentSession struct {
 }
 
 var session = AgentSession{
-	agentID:       "smith",
-	rpcTimeout:    20 * time.Second,
-	authorization: "TODO-jwt-goes-here",
-	done:          make(chan struct{}),
+	rpcTimeout: 20 * time.Second,
+	done:       make(chan struct{}),
 }
 
 func sendHello(ctx context.Context, c pb.TunnelServiceClient, hostname string, version string) (*pb.HelloResponse, error) {
@@ -158,88 +157,6 @@ func pinger(ctx context.Context, c pb.TunnelServiceClient, tickTime int) error {
 			return err
 		}
 		logger.Infof("Got ping repsonse: servertime=%d, mytime=%d", r.Ts, r.EchoedTs)
-	}
-}
-
-func sendErrorHeaders(ctx context.Context, c pb.TunnelServiceClient, streamID string) {
-	ctx, logger := loggerFromContext(ctx)
-	ctx, cancel := getHeaderContext(ctx, session.rpcTimeout)
-	defer cancel()
-	_, err := c.SendHeaders(ctx, &pb.TunnelHeaders{
-		StreamId:      streamID,
-		ContentLength: 0,
-		Status:        http.StatusBadRequest,
-	})
-	if err != nil {
-		logger.Errorw("unable to SendHeaders", "error", err)
-	}
-}
-
-func sendHeaders(ctx context.Context, c pb.TunnelServiceClient, streamID string, resp *http.Response) error {
-	ctx, cancel := getHeaderContext(ctx, session.rpcTimeout)
-	defer cancel()
-
-	headers := []*pb.HttpHeader{}
-	for k, v := range resp.Header {
-		headers = append(headers, &pb.HttpHeader{Name: k, Values: v})
-	}
-	_, err := c.SendHeaders(ctx, &pb.TunnelHeaders{
-		StreamId:      streamID,
-		Status:        int32(resp.StatusCode),
-		Headers:       headers,
-		ContentLength: resp.ContentLength,
-	})
-	return err
-}
-
-func sendBody(ctx context.Context, c pb.TunnelService_SendDataClient, streamID string, data []byte) error {
-	return c.Send(&pb.Data{
-		StreamId: streamID,
-		Data:     data,
-	})
-}
-
-func dispatchRequest(ctx context.Context, c pb.TunnelServiceClient, req *pb.TunnelRequest) {
-	ctx, logger := loggerFromContext(ctx)
-	hr, err := http.NewRequestWithContext(ctx, req.Method, req.URI, bytes.NewReader(req.Body))
-	if err != nil {
-		logger.Warnw("dispatchRequest NewRequestWithContext", "error", err)
-		sendErrorHeaders(ctx, c, req.StreamId)
-		return
-	}
-
-	resp, err := http.DefaultClient.Do(hr)
-	if err != nil {
-		logger.Warnw("dispatchRequest NewRequestWithContext", "error", err)
-		sendErrorHeaders(ctx, c, req.StreamId)
-		return
-	}
-	defer resp.Body.Close()
-
-	err = sendHeaders(ctx, c, req.StreamId, resp)
-	if err != nil {
-		logger.Errorw("dispatchRequest sendHeaders failed", "error", err)
-		return
-	}
-
-	stream, err := c.SendData(ctx)
-	if err != nil {
-		logger.Errorw("SendData()", "error", err)
-		return
-	}
-
-	body, err := io.ReadAll(hr.Body)
-	if err != nil {
-		if err := sendBody(ctx, stream, req.StreamId, []byte{}); err != nil {
-			logger.Errorw("sendBody(EOF)", "error", err)
-		}
-		return
-	}
-	if err := sendBody(ctx, stream, req.StreamId, body); err != nil {
-		logger.Errorw("sendBody(with body)", "error", err)
-	}
-	if err := sendBody(ctx, stream, req.StreamId, []byte{}); err != nil {
-		logger.Errorw("sendBody(EOF)", "error", err)
 	}
 }
 
@@ -362,6 +279,13 @@ func main() {
 	}
 	logger.Infow("config", "controllerHostname", config.ControllerHostname)
 
+	agentServiceConfig, err := serviceconfig.LoadServiceConfig(config.ServicesConfigPath)
+	if err != nil {
+		logger.Fatalf("loading services config: %v", err)
+	}
+
+	endpoints = serviceconfig.ConfigureEndpoints(secretsLoader, agentServiceConfig)
+
 	authToken, err := getAuthToken(config.AuthTokenFile)
 	if err != nil {
 		logger.Fatal(err)
@@ -395,6 +319,7 @@ func main() {
 	hello, err := sendHello(ctx, c, hostname, version.VersionString())
 	check(ctx, err)
 	session.sessionID = hello.InstanceId
+	session.agentID = hello.AgentId
 
 	go func() {
 		err := waitForRequest(ctx, c)

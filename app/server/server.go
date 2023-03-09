@@ -102,7 +102,10 @@ func (s *server) SendHeaders(ctx context.Context, in *pb.TunnelHeaders) (*pb.Sen
 	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, "Hello must be called first")
 	}
-	logger.Infow("SendHeaders", "contentLength", in.ContentLength, "headersLength", len(in.Headers))
+	logger.Infow("SendHeaders",
+		"contentLength", in.ContentLength,
+		"headersLength", len(in.Headers),
+		"statusCode", in.Status)
 	return &pb.SendHeadersResponse{}, nil
 }
 
@@ -159,17 +162,16 @@ func runAgentGRPCServer(ctx context.Context, useTLS bool, serverCert *tls.Certif
 		Certificates: []tls.Certificate{*serverCert},
 		MinVersion:   tls.VersionTLS13,
 	})
-	opts := []grpc.ServerOption{grpc.Creds(creds)}
-	grpcServer := grpc.NewServer(opts...)
-
 	interceptor := NewJWTInterceptor()
-	s := grpc.NewServer(
+	opts := []grpc.ServerOption{
+		grpc.Creds(creds),
 		grpc.KeepaliveEnforcementPolicy(kaep),
 		grpc.KeepaliveParams(kasp),
 		grpc.UnaryInterceptor(interceptor.Unary()),
 		grpc.StreamInterceptor(interceptor.Stream()),
-	)
-	pb.RegisterTunnelServiceServer(s, sconfig)
+	}
+	grpcServer := grpc.NewServer(opts...)
+	pb.RegisterTunnelServiceServer(grpcServer, sconfig)
 	if err := grpcServer.Serve(lis); err != nil {
 		logger.Fatalw("grpcServer.Serve() failed", "error", err)
 	}
