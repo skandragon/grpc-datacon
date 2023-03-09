@@ -77,20 +77,21 @@ func MakeCNCServer(
 
 func (s *CNCServer) authenticate(method string, h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
 		if r.Method != method {
 			err := fmt.Errorf("only '%s' is accepted (not '%s')", method, r.Method)
-			util.FailRequest(w, err, http.StatusMethodNotAllowed)
+			util.FailRequest(ctx, w, err, http.StatusMethodNotAllowed)
 			return
 		}
 
 		names, err := ca.GetCertificateNameFromCert(r.TLS.PeerCertificates[0])
 		if err != nil {
-			util.FailRequest(w, err, http.StatusForbidden)
+			util.FailRequest(ctx, w, err, http.StatusForbidden)
 			return
 		}
 		if names.Purpose != ca.CertificatePurposeControl {
 			err := fmt.Errorf("certificate is not authorized for 'control': %s", names.Purpose)
-			util.FailRequest(w, err, http.StatusForbidden)
+			util.FailRequest(ctx, w, err, http.StatusForbidden)
 			return
 		}
 
@@ -100,18 +101,19 @@ func (s *CNCServer) authenticate(method string, h http.HandlerFunc) http.Handler
 
 func (s *CNCServer) generateKubectlComponents() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
 		w.Header().Set("content-type", "application/json")
 
 		var req fwdapi.KubeConfigRequest
 		err := json.NewDecoder(r.Body).Decode(&req)
 		if err != nil {
-			util.FailRequest(w, err, http.StatusBadRequest)
+			util.FailRequest(ctx, w, err, http.StatusBadRequest)
 			return
 		}
 
 		err = req.Validate()
 		if err != nil {
-			util.FailRequest(w, err, http.StatusBadRequest)
+			util.FailRequest(ctx, w, err, http.StatusBadRequest)
 			return
 		}
 
@@ -123,7 +125,7 @@ func (s *CNCServer) generateKubectlComponents() http.HandlerFunc {
 		}
 		ca64, user64, key64, err := s.authority.GenerateCertificate(name)
 		if err != nil {
-			util.FailRequest(w, err, http.StatusBadRequest)
+			util.FailRequest(ctx, w, err, http.StatusBadRequest)
 			return
 		}
 		ret := fwdapi.KubeConfigResponse{
@@ -136,7 +138,7 @@ func (s *CNCServer) generateKubectlComponents() http.HandlerFunc {
 		}
 		json, err := json.Marshal(ret)
 		if err != nil {
-			util.FailRequest(w, err, http.StatusBadRequest)
+			util.FailRequest(ctx, w, err, http.StatusBadRequest)
 			return
 		}
 		n, err := w.Write(json)
@@ -153,18 +155,19 @@ func (s *CNCServer) generateKubectlComponents() http.HandlerFunc {
 
 func (s *CNCServer) generateAgentManifestComponents() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
 		w.Header().Set("content-type", "application/json")
 
 		var req fwdapi.ManifestRequest
 		err := json.NewDecoder(r.Body).Decode(&req)
 		if err != nil {
-			util.FailRequest(w, err, http.StatusBadRequest)
+			util.FailRequest(ctx, w, err, http.StatusBadRequest)
 			return
 		}
 
 		err = req.Validate()
 		if err != nil {
-			util.FailRequest(w, err, http.StatusBadRequest)
+			util.FailRequest(ctx, w, err, http.StatusBadRequest)
 			return
 		}
 
@@ -174,7 +177,7 @@ func (s *CNCServer) generateAgentManifestComponents() http.HandlerFunc {
 		}
 		ca64, user64, key64, err := s.authority.GenerateCertificate(name)
 		if err != nil {
-			util.FailRequest(w, err, http.StatusBadRequest)
+			util.FailRequest(ctx, w, err, http.StatusBadRequest)
 			return
 		}
 		ret := fwdapi.ManifestResponse{
@@ -191,7 +194,7 @@ func (s *CNCServer) generateAgentManifestComponents() http.HandlerFunc {
 		}
 		json, err := json.Marshal(ret)
 		if err != nil {
-			util.FailRequest(w, err, http.StatusBadRequest)
+			util.FailRequest(ctx, w, err, http.StatusBadRequest)
 			return
 		}
 		n, err := w.Write(json)
@@ -208,12 +211,13 @@ func (s *CNCServer) generateAgentManifestComponents() http.HandlerFunc {
 
 func (s *CNCServer) generateServiceCredentials() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
 		w.Header().Set("content-type", "application/json")
 
 		var req fwdapi.ServiceCredentialRequest
 		err := json.NewDecoder(r.Body).Decode(&req)
 		if err != nil {
-			util.FailRequest(w, err, http.StatusBadRequest)
+			util.FailRequest(ctx, w, err, http.StatusBadRequest)
 			return
 		}
 		// TODO: remove in a future version, once sapor updates to using the proper capitalization.
@@ -224,21 +228,21 @@ func (s *CNCServer) generateServiceCredentials() http.HandlerFunc {
 			req.Name = req.OldName
 		}
 
-		err = req.Validate()
+		err = req.Validate(ctx)
 		if err != nil {
-			util.FailRequest(w, err, http.StatusBadRequest)
+			util.FailRequest(ctx, w, err, http.StatusBadRequest)
 			return
 		}
 
 		token, err := jwtutil.MakeServiceJWT(req.Type, req.Name, req.AgentName, nil)
 		if err != nil {
-			util.FailRequest(w, err, http.StatusBadRequest)
+			util.FailRequest(ctx, w, err, http.StatusBadRequest)
 			return
 		}
 
 		cacert, err := s.authority.GetCACert()
 		if err != nil {
-			util.FailRequest(w, err, http.StatusBadRequest)
+			util.FailRequest(ctx, w, err, http.StatusBadRequest)
 			return
 		}
 
@@ -270,7 +274,7 @@ func (s *CNCServer) generateServiceCredentials() http.HandlerFunc {
 		}
 		json, err := json.Marshal(ret)
 		if err != nil {
-			util.FailRequest(w, err, http.StatusBadRequest)
+			util.FailRequest(ctx, w, err, http.StatusBadRequest)
 			return
 		}
 		n, err := w.Write(json)
@@ -287,18 +291,19 @@ func (s *CNCServer) generateServiceCredentials() http.HandlerFunc {
 
 func (s *CNCServer) generateControlCredentials() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
 		w.Header().Set("content-type", "application/json")
 
 		var req fwdapi.ControlCredentialsRequest
 		err := json.NewDecoder(r.Body).Decode(&req)
 		if err != nil {
-			util.FailRequest(w, err, http.StatusBadRequest)
+			util.FailRequest(ctx, w, err, http.StatusBadRequest)
 			return
 		}
 
 		err = req.Validate()
 		if err != nil {
-			util.FailRequest(w, err, http.StatusBadRequest)
+			util.FailRequest(ctx, w, err, http.StatusBadRequest)
 			return
 		}
 
@@ -308,7 +313,7 @@ func (s *CNCServer) generateControlCredentials() http.HandlerFunc {
 		}
 		ca64, user64, key64, err := s.authority.GenerateCertificate(name)
 		if err != nil {
-			util.FailRequest(w, err, http.StatusBadRequest)
+			util.FailRequest(ctx, w, err, http.StatusBadRequest)
 			return
 		}
 		ret := fwdapi.ControlCredentialsResponse{
@@ -320,7 +325,7 @@ func (s *CNCServer) generateControlCredentials() http.HandlerFunc {
 		}
 		json, err := json.Marshal(ret)
 		if err != nil {
-			util.FailRequest(w, err, http.StatusBadRequest)
+			util.FailRequest(ctx, w, err, http.StatusBadRequest)
 			return
 		}
 		n, err := w.Write(json)
@@ -337,6 +342,7 @@ func (s *CNCServer) generateControlCredentials() http.HandlerFunc {
 
 func (s *CNCServer) getStatistics() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
 		w.Header().Set("content-type", "application/json")
 
 		ret := fwdapi.StatisticsResponse{
@@ -346,7 +352,7 @@ func (s *CNCServer) getStatistics() http.HandlerFunc {
 		}
 		json, err := json.Marshal(ret)
 		if err != nil {
-			util.FailRequest(w, err, http.StatusBadRequest)
+			util.FailRequest(ctx, w, err, http.StatusBadRequest)
 			return
 		}
 		n, err := w.Write(json)
