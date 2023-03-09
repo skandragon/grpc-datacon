@@ -21,6 +21,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"flag"
 	"io"
@@ -273,9 +274,16 @@ func loggerFromContext(ctx context.Context) (context.Context, *zap.SugaredLogger
 
 func loadCACertPEM(ctx context.Context) []byte {
 	_, logger := loggerFromContext(ctx)
-	cert, err := os.ReadFile(config.CACertPath)
+	cert, err := os.ReadFile(config.CACertFile)
+	if err == nil {
+		return cert
+	}
+	if config.CACert64 == "" {
+		logger.Fatal("Unable to load CA certificate from file or from config")
+	}
+	cert, err = base64.StdEncoding.DecodeString(config.CACert64)
 	if err != nil {
-		logger.Fatalw("Unable to load CA cert", "filename", config.CACertPath)
+		logger.Fatal("Unable to decode CA cert base64 from config")
 	}
 	return cert
 }
@@ -354,9 +362,9 @@ func main() {
 	}
 	logger.Infow("config", "controllerHostname", config.ControllerHostname)
 
-	authToken, err := getAuthToken(config.AuthTokenPath)
+	authToken, err := getAuthToken(config.AuthTokenFile)
 	if err != nil {
-		logger.Error(err)
+		logger.Fatal(err)
 	}
 	session.authorization = authToken
 

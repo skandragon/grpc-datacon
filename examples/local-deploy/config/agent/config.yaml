@@ -1,0 +1,6 @@
+controllerHostname: localhost:8003
+certFile: agent-cert.pem
+caCertFile: ca-cert.pem
+keyFile: agent-key.pem
+servicesConfigFile: config/agent/services.yaml
+authTokenFile: agent-token

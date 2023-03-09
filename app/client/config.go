@@ -35,9 +35,10 @@ const (
 // environment variables are applied.
 type agentConfig struct {
 	ControllerHostname string `json:"controllerHostname,omitempty" yaml:"controllerHostname,omitempty"`
-	CACertPath         string `json:"caCertPath,omitempty" yaml:"caCertPath,omitempty"`
-	AuthTokenPath      string `json:"authTokenPath,omitempty" yaml:"authTokenPath,omitempty"`
-	ServicesConfigPath string `json:"servicesConfigPath,omitempty" yaml:"servicesConfigPath,omitempty"`
+	CACertFile         string `json:"caCertFile,omitempty" yaml:"caCertFile,omitempty"`
+	CACert64           string `json:"caCert64,omitempty" yaml:"caCert64,omitempty"`
+	AuthTokenFile      string `json:"authTokenFile,omitempty" yaml:"authTokenFile,omitempty"`
+	ServicesConfigFile string `json:"servicesConfigFile,omitempty" yaml:"servicesConfigFile,omitempty"`
 	DialMaxRetries     int    `json:"dialMaxRetries,omitempty" yaml:"dialMaxRetries,omitempty"`
 	DialRetryTime      int    `json:"dialRetryTime,omitempty" yaml:"dialRetryTime,omitempty"`
 }
@@ -47,16 +48,16 @@ func (c *agentConfig) applyDefaults() {
 		c.ControllerHostname = "agent-controller:9001"
 	}
 
-	if len(c.CACertPath) == 0 {
-		c.CACertPath = defaultCACertPath
+	if len(c.CACertFile) == 0 {
+		c.CACertFile = defaultCACertPath
 	}
 
-	if len(c.AuthTokenPath) == 0 {
-		c.AuthTokenPath = defaultAuthTokenPath
+	if len(c.AuthTokenFile) == 0 {
+		c.AuthTokenFile = defaultAuthTokenPath
 	}
 
-	if len(c.ServicesConfigPath) == 0 {
-		c.ServicesConfigPath = defaultUserconfigPath
+	if len(c.ServicesConfigFile) == 0 {
+		c.ServicesConfigFile = defaultUserconfigPath
 	}
 
 	if c.DialMaxRetries == 0 {
