@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/OpsMx/go-app-base/httputil"
 	"github.com/lestrrat-go/jwx/v2/jwt"
 	"github.com/skandragon/grpc-datacon/internal/jwtutil"
 	"github.com/skandragon/grpc-datacon/internal/logging"
@@ -207,104 +208,6 @@ func (ep *GenericEndpoint) unmutateURI(typ string, method string, uri string, cl
 	return uri, nil
 }
 
-func sendErrorHeaders(ctx context.Context, c pb.TunnelServiceClient, streamID string) {
-	logger := logging.WithContext(ctx).Sugar()
-	ctx, cancel := getHeaderContext(ctx, session.rpcTimeout)
-	defer cancel()
-	_, err := c.SendHeaders(ctx, &pb.TunnelHeaders{
-		StreamId:      streamID,
-		ContentLength: 0,
-		Status:        http.StatusBadRequest,
-	})
-	if err != nil {
-		logger.Errorw("unable to SendHeaders", "error", err)
-	}
-}
-
-func sendHeaders(ctx context.Context, c pb.TunnelServiceClient, streamID string, resp *http.Response) error {
-	ctx, cancel := getHeaderContext(ctx, session.rpcTimeout)
-	defer cancel()
-
-	headers := []*pb.HttpHeader{}
-	for k, v := range resp.Header {
-		headers = append(headers, &pb.HttpHeader{Name: k, Values: v})
-	}
-	_, err := c.SendHeaders(ctx, &pb.TunnelHeaders{
-		StreamId:      streamID,
-		Status:        int32(resp.StatusCode),
-		Headers:       headers,
-		ContentLength: resp.ContentLength,
-	})
-	return err
-}
-
-func sendBody(ctx context.Context, c pb.TunnelService_SendDataClient, streamID string, data []byte) error {
-	return c.Send(&pb.Data{
-		StreamId: streamID,
-		Data:     data,
-	})
-}
-
-func dispatchRequest(ctx context.Context, c pb.TunnelServiceClient, req *pb.TunnelRequest) {
-	logger := logging.WithContext(ctx).Sugar()
-	hr, err := http.NewRequestWithContext(ctx, req.Method, req.URI, bytes.NewReader(req.Body))
-	if err != nil {
-		logger.Warnw("dispatchRequest NewRequestWithContext", "error", err)
-		sendErrorHeaders(ctx, c, req.StreamId)
-		return
-	}
-
-	resp, err := http.DefaultClient.Do(hr)
-	if err != nil {
-		logger.Warnw("dispatchRequest NewRequestWithContext", "error", err)
-		sendErrorHeaders(ctx, c, req.StreamId)
-		return
-	}
-	defer resp.Body.Close()
-
-	err = sendHeaders(ctx, c, req.StreamId, resp)
-	if err != nil {
-		logger.Errorw("dispatchRequest sendHeaders failed", "error", err)
-		return
-	}
-
-	stream, err := c.SendData(ctx)
-	if err != nil {
-		logger.Errorw("SendData()", "error", err)
-		return
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		if err := sendBody(ctx, stream, req.StreamId, []byte{}); err != nil {
-			logger.Errorw("sendBody(EOF)", "error", err)
-		}
-		return
-	}
-	logger.Infof("read body: %d bytes", len(body))
-	if err := sendBody(ctx, stream, req.StreamId, body); err != nil {
-		logger.Errorw("sendBody(with body)", "error", err)
-	}
-	if err := sendBody(ctx, stream, req.StreamId, []byte{}); err != nil {
-		logger.Errorw("sendBody(EOF)", "error", err)
-	}
-}
-
-type HTTPEcho interface {
-	// Headers is called once to send the appropriate headers.
-	Headers(ctx context.Context, h *pb.TunnelHeaders) error
-	// Data is called one or more times to send data.
-	Data(ctx context.Context, d *pb.Data) error
-	// Fail can be called to indicate no more calls will be made.  This may happen
-	// without calling Headers() or Data(), or after calling one or both.  If
-	// headers have been sent, this should send a EOF Data frame.
-	Fail(ctx context.Context, httpCode int, err error) error
-	// Done indicates the session ended.  If headers have not been sent,
-	// this is an error.  Data may not be called, and Done should send
-	// an EOF Data frame.
-	Done(ctx context.Context)
-}
-
 func containsFolded(l []string, t string) bool {
 	for i := 0; i < len(l); i++ {
 		if strings.EqualFold(l[i], t) {
@@ -407,5 +310,100 @@ func (ep *GenericEndpoint) ExecuteHTTPRequest(ctx context.Context, agentName str
 		httpRequest.Header.Set("Authorization", "Token "+creds.rawToken)
 	}
 
-	return tunnel.RunHTTPRequest(client, req, httpRequest, echo, ep.config.URL)
+	RunHTTPRequest(ctx, client, req, httpRequest, echo, ep.config.URL)
+	return nil
+}
+
+var strippedOutgoingHeaders = []string{"Authorization"}
+
+func MakeHeaders(headers map[string][]string) (ret []*pb.HttpHeader, err error) {
+	ret = make([]*pb.HttpHeader, 0)
+	for name, values := range headers {
+		if jwtutil.MutationIsRegistered() && containsFolded(mutatedHeaders, name) {
+			// only handle the first item in the list, which is typical here
+			value := values[0]
+			mutated, err := jwtutil.MutateHeader(value, nil)
+			if err != nil {
+				return nil, err
+			}
+			ret = append(ret, &pb.HttpHeader{Name: name, Values: []string{string(mutated)}})
+		} else if !containsFolded(strippedOutgoingHeaders, name) {
+			ret = append(ret, &pb.HttpHeader{Name: name, Values: values})
+		}
+	}
+	return ret, nil
+}
+
+func makeResponse(id string, response *http.Response) (*pb.TunnelHeaders, error) {
+	headers, err := MakeHeaders(response.Header)
+	if err != nil {
+		return nil, err
+	}
+	ret := &pb.TunnelHeaders{
+		StreamId:      id,
+		Status:        int32(response.StatusCode),
+		ContentLength: response.ContentLength,
+		Headers:       headers,
+	}
+	return ret, err
+}
+
+func RunHTTPRequest(ctx context.Context, client *http.Client, req *pb.TunnelRequest, httpRequest *http.Request, echo HTTPEcho, baseURL string) {
+	logger := logging.WithContext(ctx).Sugar()
+
+	requestURI := baseURL + req.URI
+	logger.Debugf("Sending HTTP request: %s to %s", req.Method, requestURI)
+	httpResponse, err := client.Do(httpRequest)
+	if err != nil {
+		logger.Warnw("failed to execute request",
+			"method", req.Method,
+			"uri", baseURL+req.URI,
+			"error", err)
+		echo.Fail(ctx, http.StatusBadGateway, err)
+		return
+	}
+
+	defer httpResponse.Body.Close()
+
+	// First, send the headers.
+	response, err := makeResponse(req.StreamId, httpResponse)
+	if err != nil {
+		err = fmt.Errorf("Failed to unmutate headers: %v", err)
+		logger.Warn(err)
+		echo.Fail(ctx, http.StatusBadGateway, err)
+		return
+	}
+	if err := echo.Headers(ctx, response); err != nil {
+		logger.Warn(err)
+		echo.Fail(ctx, http.StatusServiceUnavailable, err)
+		return
+	}
+
+	if !httputil.StatusCodeOK(httpResponse.StatusCode) {
+		logger.Warnw("non-2xx status for request", "method", req.Method, "url", requestURI)
+	}
+
+	// Now, send one or more data packet.
+	for {
+		buf := make([]byte, 10240)
+		n, err := httpResponse.Body.Read(buf)
+		if n > 0 {
+			echo.Data(ctx, &pb.Data{StreamId: req.StreamId, Data: buf[:n]})
+		}
+		if err == io.EOF {
+			echo.Data(ctx, &pb.Data{StreamId: req.StreamId, Data: []byte{}})
+			return
+		}
+		if err == context.Canceled {
+			echo.Fail(ctx, http.StatusBadGateway, nil)
+			return
+		}
+		if err != nil {
+			err = fmt.Errorf("Got error on HTTP read: %v", err)
+			logger.Warn(err)
+			echo.Fail(ctx, http.StatusBadGateway, err)
+			echo.Data(ctx, &pb.Data{StreamId: req.StreamId, Data: []byte{}})
+			return
+		}
+	}
 }

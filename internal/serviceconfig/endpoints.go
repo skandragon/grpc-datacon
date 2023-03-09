@@ -22,7 +22,7 @@ import (
 
 	"github.com/skandragon/grpc-datacon/internal/logging"
 	"github.com/skandragon/grpc-datacon/internal/secrets"
-	"github.com/skandragon/grpc-datacon/internal/tunnel"
+	pb "github.com/skandragon/grpc-datacon/internal/tunnel"
 	"gopkg.in/yaml.v3"
 )
 
@@ -38,7 +38,7 @@ type ConfiguredEndpoint struct {
 }
 
 type httpRequestProcessor interface {
-	ExecuteHTTPRequest(ctx context.Context, agentName string, dataflow chan *tunnel.Data, req *tunnel.TunnelRequest)
+	ExecuteHTTPRequest(ctx context.Context, agentName string, echo HTTPEcho, req *pb.TunnelRequest) error
 }
 
 func (e *ConfiguredEndpoint) String() string {
@@ -47,14 +47,14 @@ func (e *ConfiguredEndpoint) String() string {
 
 // EndpointsToPB builds the protobuf component of the "hello" message to advertise the
 // endpoints we have defined.
-func EndpointsToPB(endpoints []ConfiguredEndpoint) []*tunnel.EndpointHealth {
-	pbEndpoints := make([]*tunnel.EndpointHealth, len(endpoints))
+func EndpointsToPB(endpoints []ConfiguredEndpoint) []*pb.EndpointHealth {
+	pbEndpoints := make([]*pb.EndpointHealth, len(endpoints))
 	for i, ep := range endpoints {
-		annotations := []*tunnel.Annotation{}
+		annotations := []*pb.Annotation{}
 		for k, v := range ep.Annotations {
-			annotations = append(annotations, &tunnel.Annotation{Name: k, Value: v})
+			annotations = append(annotations, &pb.Annotation{Name: k, Value: v})
 		}
-		endp := &tunnel.EndpointHealth{
+		endp := &pb.EndpointHealth{
 			Name:        ep.Name,
 			Type:        ep.Type,
 			Configured:  ep.Configured,
@@ -92,7 +92,7 @@ func ConfigureEndpoints(ctx context.Context, secretsLoader secrets.SecretLoader,
 			//			case "aws":
 			//				instance, configured, err = MakeAwsEndpoint(service.Name, config, secretsLoader)
 			default:
-				instance, configured, err = MakeGenericEndpoint(service.Type, service.Name, config, secretsLoader)
+				instance, configured, err = MakeGenericEndpoint(ctx, service.Type, service.Name, config, secretsLoader)
 			}
 
 			// If the instance-specific make method returns an error, catch it here.

@@ -17,7 +17,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -26,7 +25,6 @@ import (
 	"flag"
 	"io"
 	"log"
-	"net/http"
 	"os"
 	"runtime"
 	"strings"
@@ -66,7 +64,7 @@ var (
 	config         *agentConfig
 	tracerProvider *tracer.TracerProvider
 	secretsLoader  secrets.SecretLoader
-	endpoints      serviceconfig.ServiceConfig
+	endpoints      []serviceconfig.ConfiguredEndpoint
 )
 
 func check(ctx context.Context, err error) {
@@ -140,7 +138,9 @@ func waitForRequest(ctx context.Context, c pb.TunnelServiceClient) error {
 			"serviceType", req.Type,
 			"uri", req.URI,
 			"bodyLength", len(req.Body))
-		go dispatchRequest(ctx, c, req)
+		// TODO: implement endpoint search and dispatch request
+		//		ep, found := findEndpoint()
+		//		go dispatchRequest(ctx, c, req)
 	}
 }
 
@@ -279,12 +279,12 @@ func main() {
 	}
 	logger.Infow("config", "controllerHostname", config.ControllerHostname)
 
-	agentServiceConfig, err := serviceconfig.LoadServiceConfig(config.ServicesConfigPath)
+	agentServiceConfig, err := serviceconfig.LoadServiceConfig(config.ServicesConfigFile)
 	if err != nil {
 		logger.Fatalf("loading services config: %v", err)
 	}
 
-	endpoints = serviceconfig.ConfigureEndpoints(secretsLoader, agentServiceConfig)
+	endpoints = serviceconfig.ConfigureEndpoints(ctx, secretsLoader, agentServiceConfig)
 
 	authToken, err := getAuthToken(config.AuthTokenFile)
 	if err != nil {
