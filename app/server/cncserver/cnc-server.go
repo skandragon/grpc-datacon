@@ -27,10 +27,12 @@ import (
 	"net/http"
 
 	"github.com/OpsMx/go-app-base/version"
+	"github.com/lestrrat-go/jwx/v2/jwt"
 	"github.com/oklog/ulid/v2"
 	"github.com/skandragon/grpc-datacon/internal/ca"
 	"github.com/skandragon/grpc-datacon/internal/fwdapi"
 	"github.com/skandragon/grpc-datacon/internal/jwtutil"
+	"github.com/skandragon/grpc-datacon/internal/logging"
 	"github.com/skandragon/grpc-datacon/internal/util"
 )
 
@@ -57,21 +59,23 @@ type CNCServer struct {
 	authority     cncCertificateAuthority
 	agentReporter cncAgentStatsReporter
 	version       string
+	clock         jwt.Clock
 }
 
-// MakeCNCServer will return a server that implenets the endpoints for command and control,
-// and and
+// MakeCNCServer creates a new CNC server from the provided config.
 func MakeCNCServer(
 	config cncConfig,
 	authority cncCertificateAuthority,
 	agents cncAgentStatsReporter,
 	vers string,
+	clock jwt.Clock,
 ) *CNCServer {
 	return &CNCServer{
 		cfg:           config,
 		authority:     authority,
 		agentReporter: agents,
 		version:       vers,
+		clock:         clock,
 	}
 }
 
@@ -156,6 +160,7 @@ func (s *CNCServer) generateKubectlComponents() http.HandlerFunc {
 func (s *CNCServer) generateAgentManifestComponents() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
+		logger := logging.WithContext(ctx).Sugar()
 		w.Header().Set("content-type", "application/json")
 
 		var req fwdapi.ManifestRequest
@@ -171,23 +176,27 @@ func (s *CNCServer) generateAgentManifestComponents() http.HandlerFunc {
 			return
 		}
 
-		name := ca.CertificateName{
-			Agent:   req.AgentName,
-			Purpose: ca.CertificatePurposeAgent,
-		}
-		ca64, user64, key64, err := s.authority.GenerateCertificate(name)
+		ca64, err := s.authority.GetCACert()
 		if err != nil {
 			util.FailRequest(ctx, w, err, http.StatusBadRequest)
 			return
 		}
+
+		s.authority.GetCACert()
+
+		jwt, err := jwtutil.MakeAgentJWT(req.AgentName, s.clock)
+		if err != nil {
+			logger.Errorf("MakeAgentJWT failed: %v", err)
+			util.FailRequest(ctx, w, err, http.StatusInternalServerError)
+			return
+		}
 		ret := fwdapi.ManifestResponse{
-			AgentName:        req.AgentName,
-			ServerHostname:   s.cfg.GetAgentHostname(),
-			ServerPort:       s.cfg.GetAgentAdvertisePort(),
-			AgentCertificate: user64,
-			AgentVersion:     version.GitBranch(),
-			AgentKey:         key64,
-			CACert:           ca64,
+			AgentName:      req.AgentName,
+			ServerHostname: s.cfg.GetAgentHostname(),
+			ServerPort:     s.cfg.GetAgentAdvertisePort(),
+			AgentVersion:   version.GitBranch(),
+			AgentToken:     jwt,
+			CACert:         ca64,
 		}
 		if version.BuildType() != "release" {
 			ret.AgentVersion = "latest"
@@ -234,7 +243,7 @@ func (s *CNCServer) generateServiceCredentials() http.HandlerFunc {
 			return
 		}
 
-		token, err := jwtutil.MakeServiceJWT(req.Type, req.Name, req.AgentName, nil)
+		token, err := jwtutil.MakeServiceJWT(req.Type, req.Name, req.AgentName, s.clock)
 		if err != nil {
 			util.FailRequest(ctx, w, err, http.StatusBadRequest)
 			return
@@ -264,8 +273,6 @@ func (s *CNCServer) generateServiceCredentials() http.HandlerFunc {
 				AwsSecretAccessKey: token,
 			}
 		default:
-			ret.Username = username // deprecated
-			ret.Password = token    // deprecated
 			ret.CredentialType = "basic"
 			ret.Credential = fwdapi.BasicCredentialResponse{
 				Username: username,

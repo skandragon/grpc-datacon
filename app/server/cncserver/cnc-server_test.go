@@ -33,6 +33,7 @@ import (
 	"github.com/skandragon/grpc-datacon/internal/ca"
 	"github.com/skandragon/grpc-datacon/internal/fwdapi"
 	"github.com/skandragon/grpc-datacon/internal/jwtutil"
+	"github.com/skandragon/jwtregistry/v2"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -137,7 +138,7 @@ func TestCNCServer_authenticate(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := MakeCNCServer(nil, nil, nil, "")
+			c := MakeCNCServer(nil, nil, nil, "", nil)
 			h := handlerTracker{}
 			r := httptest.NewRequest("GET", "https://localhost/statistics", nil)
 			r.TLS.PeerCertificates = []*x509.Certificate{tt.cert}
@@ -195,7 +196,7 @@ func TestCNCServer_generateKubectlComponents(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := MakeCNCServer(&mockConfig{}, &mockAuthority{}, nil, "")
+			c := MakeCNCServer(&mockConfig{}, &mockAuthority{}, nil, "", nil)
 
 			body, err := json.Marshal(tt.request)
 			if err != nil {
@@ -236,9 +237,8 @@ func TestCNCServer_generateAgentManifestComponents(t *testing.T) {
 		assert.Equal(t, "agent smith", response.AgentName)
 		assert.Equal(t, "agent.local", response.ServerHostname)
 		assert.Equal(t, "1234", fmt.Sprintf("%d", response.ServerPort))
-		assert.Equal(t, "b", response.AgentCertificate)
-		assert.Equal(t, "c", response.AgentKey)
-		assert.Equal(t, "a", response.CACert)
+		assert.Equal(t, "eyJhbGciOiJIUzI1NiIsImtpZCI6ImFnZW50a2V5MSIsInR5cCI6IkpXVCJ9.eyJhIjoiYWdlbnQgc21pdGgiLCJpYXQiOjEyMzQsImlzcyI6Im9wc214In0.17tJL5QhUAgpiNT74QxGYL5Hmx8k6LEP9lFRgO9Bdug", response.AgentToken)
+		assert.Equal(t, "base64-cacert", response.CACert)
 	}
 
 	tests := []struct {
@@ -268,7 +268,11 @@ func TestCNCServer_generateAgentManifestComponents(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := MakeCNCServer(&mockConfig{}, &mockAuthority{}, nil, "")
+			keyset := makeTestKeyset("agentkey1")
+			if err := jwtutil.RegisterAgentKeyset(keyset, "agentkey1"); err != nil {
+				panic(err)
+			}
+			c := MakeCNCServer(&mockConfig{}, &mockAuthority{}, nil, "", &jwtregistry.TimeClock{NowTime: 1234})
 
 			body, err := json.Marshal(tt.request)
 			if err != nil {
@@ -396,24 +400,11 @@ func TestCNCServer_generateServiceCredentials(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			key1, err := jwk.FromRaw([]byte("key 1"))
-			if err != nil {
+			keyset := makeTestKeyset("key1")
+			if err := jwtutil.RegisterServiceKeyset(keyset, "key1"); err != nil {
 				panic(err)
 			}
-			err = key1.Set(jwk.KeyIDKey, "key1")
-			if err != nil {
-				panic(err)
-			}
-			err = key1.Set(jwk.AlgorithmKey, jwa.HS256)
-			if err != nil {
-				panic(err)
-			}
-			keyset := jwk.NewSet()
-			keyset.AddKey(key1)
-			if err = jwtutil.RegisterServiceKeyset(keyset, "key1"); err != nil {
-				panic(err)
-			}
-			c := MakeCNCServer(&mockConfig{}, &mockAuthority{}, nil, "")
+			c := MakeCNCServer(&mockConfig{}, &mockAuthority{}, nil, "", nil)
 
 			body, err := json.Marshal(tt.request)
 			if err != nil {
@@ -436,6 +427,24 @@ func TestCNCServer_generateServiceCredentials(t *testing.T) {
 			tt.validateBody(t, resultBody)
 		})
 	}
+}
+
+func makeTestKeyset(keyid string) jwk.Set {
+	key, err := jwk.FromRaw([]byte("keydata+" + keyid))
+	if err != nil {
+		panic(err)
+	}
+	err = key.Set(jwk.KeyIDKey, keyid)
+	if err != nil {
+		panic(err)
+	}
+	err = key.Set(jwk.AlgorithmKey, jwa.HS256)
+	if err != nil {
+		panic(err)
+	}
+	keyset := jwk.NewSet()
+	keyset.AddKey(key)
+	return keyset
 }
 
 func TestCNCServer_generateControlCredentials(t *testing.T) {
@@ -479,7 +488,7 @@ func TestCNCServer_generateControlCredentials(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := MakeCNCServer(&mockConfig{}, &mockAuthority{}, nil, "")
+			c := MakeCNCServer(&mockConfig{}, &mockAuthority{}, nil, "", nil)
 
 			body, err := json.Marshal(tt.request)
 			if err != nil {
@@ -512,7 +521,7 @@ func TestCNCServer_generateControlCredentials(t *testing.T) {
 
 func TestCNCServer_getStatistics(t *testing.T) {
 	t.Run("getCredentials", func(t *testing.T) {
-		c := MakeCNCServer(nil, nil, &mockAgents{}, "")
+		c := MakeCNCServer(nil, nil, &mockAgents{}, "", nil)
 
 		r := httptest.NewRequest("GET", "https://localhost/foo", nil)
 		w := httptest.NewRecorder()
