@@ -20,8 +20,8 @@ import (
 	"log"
 	"testing"
 
-	"github.com/lestrrat-go/jwx/jwt"
-	"github.com/skandragon/jwtregistry"
+	"github.com/lestrrat-go/jwx/v2/jwt"
+	"github.com/skandragon/jwtregistry/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

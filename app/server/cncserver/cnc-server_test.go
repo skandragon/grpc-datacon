@@ -28,8 +28,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lestrrat-go/jwx/jwa"
-	"github.com/lestrrat-go/jwx/jwk"
+	"github.com/lestrrat-go/jwx/v2/jwa"
+	"github.com/lestrrat-go/jwx/v2/jwk"
 	"github.com/skandragon/grpc-datacon/internal/ca"
 	"github.com/skandragon/grpc-datacon/internal/fwdapi"
 	"github.com/skandragon/grpc-datacon/internal/jwtutil"
@@ -396,7 +396,7 @@ func TestCNCServer_generateServiceCredentials(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			key1, err := jwk.New([]byte("key 1"))
+			key1, err := jwk.FromRaw([]byte("key 1"))
 			if err != nil {
 				panic(err)
 			}
@@ -409,7 +409,7 @@ func TestCNCServer_generateServiceCredentials(t *testing.T) {
 				panic(err)
 			}
 			keyset := jwk.NewSet()
-			keyset.Add(key1)
+			keyset.AddKey(key1)
 			if err = jwtutil.RegisterServiceKeyset(keyset, "key1"); err != nil {
 				panic(err)
 			}

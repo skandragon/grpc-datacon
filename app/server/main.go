@@ -33,8 +33,8 @@ import (
 	"github.com/OpsMx/go-app-base/tracer"
 	"github.com/OpsMx/go-app-base/util"
 	"github.com/OpsMx/go-app-base/version"
-	"github.com/lestrrat-go/jwx/jwa"
-	"github.com/lestrrat-go/jwx/jwk"
+	"github.com/lestrrat-go/jwx/v2/jwa"
+	"github.com/lestrrat-go/jwx/v2/jwk"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/skandragon/grpc-datacon/internal/ca"
 	"github.com/skandragon/grpc-datacon/internal/jwtutil"
@@ -161,7 +161,7 @@ func loadKeyset() {
 		if err != nil {
 			return err
 		}
-		key, err := jwk.New(content)
+		key, err := jwk.ParseKey(content)
 		if err != nil {
 			return err
 		}
@@ -173,7 +173,7 @@ func loadKeyset() {
 		if err != nil {
 			return err
 		}
-		jwtKeyset.Add(key)
+		jwtKeyset.AddKey(key)
 		log.Printf("Loaded service key name %s, length %d", info.Name(), len(content))
 		return nil
 	})

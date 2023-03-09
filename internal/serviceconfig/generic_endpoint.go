@@ -22,7 +22,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/lestrrat-go/jwx/jwt"
+	"github.com/lestrrat-go/jwx/v2/jwt"
 	"github.com/skandragon/grpc-datacon/internal/jwtutil"
 	"github.com/skandragon/grpc-datacon/internal/secrets"
 	"go.uber.org/zap"

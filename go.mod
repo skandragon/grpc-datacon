@@ -6,10 +6,10 @@ require (
 	github.com/OpsMx/go-app-base v0.0.21
 	github.com/go-resty/resty/v2 v2.7.0
 	github.com/google/go-cmp v0.5.9
-	github.com/lestrrat-go/jwx v1.2.25
+	github.com/lestrrat-go/jwx/v2 v2.0.8
 	github.com/oklog/ulid/v2 v2.1.0
 	github.com/prometheus/client_golang v1.14.0
-	github.com/skandragon/jwtregistry v1.0.2
+	github.com/skandragon/jwtregistry/v2 v2.0.0
 	github.com/stretchr/testify v1.8.2
 	go.uber.org/zap v1.24.0
 	google.golang.org/grpc v1.53.0
@@ -42,9 +42,9 @@ require (
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/kr/pretty v0.3.0 // indirect
-	github.com/lestrrat-go/backoff/v2 v2.0.8 // indirect
 	github.com/lestrrat-go/blackmagic v1.0.1 // indirect
 	github.com/lestrrat-go/httpcc v1.0.1 // indirect
+	github.com/lestrrat-go/httprc v1.0.4 // indirect
 	github.com/lestrrat-go/iter v1.0.2 // indirect
 	github.com/lestrrat-go/option v1.0.1 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect

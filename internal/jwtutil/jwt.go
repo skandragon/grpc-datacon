@@ -20,9 +20,9 @@ package jwtutil
 import (
 	"fmt"
 
-	"github.com/lestrrat-go/jwx/jwk"
-	"github.com/lestrrat-go/jwx/jwt"
-	"github.com/skandragon/jwtregistry"
+	"github.com/lestrrat-go/jwx/v2/jwk"
+	"github.com/lestrrat-go/jwx/v2/jwt"
+	"github.com/skandragon/jwtregistry/v2"
 )
 
 const (
