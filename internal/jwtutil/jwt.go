@@ -30,8 +30,10 @@ const (
 	jwtEndpointNameKey      = "n"
 	jwtAgentKey             = "a"
 	issuer                  = "opsmx"
+	agentIssuer             = "opsmx-agent-auth"
 	serviceauthRegistryName = "service-auth"
 	agentRegistryName       = "agent-auth"
+	claimOpsmxAgentName     = "opsmx.agent.name"
 )
 
 // RegisterServiceKeyset registers (or re-registers) a new keyset and signing key name.
@@ -46,7 +48,7 @@ func RegisterServiceKeyset(keyset jwk.Set, signingKeyName string) error {
 // RegisterAgentKeyset registers (or re-registers) a new keyset and signing key name.
 func RegisterAgentKeyset(keyset jwk.Set, signingKeyName string) error {
 	return jwtregistry.Register(agentRegistryName,
-		issuer,
+		agentIssuer,
 		jwtregistry.WithKeyset(keyset),
 		jwtregistry.WithSigningKeyName(signingKeyName),
 	)
@@ -65,7 +67,7 @@ func MakeServiceJWT(epType string, epName string, agent string, clock jwt.Clock)
 // MakeAgentJWT will return a token with provided type, name, and agent name embedded in the claims.
 func MakeAgentJWT(agent string, clock jwt.Clock) (string, error) {
 	claims := map[string]string{
-		jwtAgentKey: agent,
+		claimOpsmxAgentName: agent,
 	}
 	return sign(agentRegistryName, claims, clock)
 }
@@ -103,9 +105,9 @@ func ValidateAgentJWT(tokenString string, clock jwt.Clock) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	agent, found := claims[jwtAgentKey]
+	agent, found := claims[claimOpsmxAgentName]
 	if found {
 		return agent, nil
 	}
-	return "", fmt.Errorf("no '%s' key in JWT claims", jwtAgentKey)
+	return "", fmt.Errorf("no '%s' key in JWT claims", claimOpsmxAgentName)
 }

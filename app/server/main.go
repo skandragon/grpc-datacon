@@ -36,6 +36,7 @@ import (
 	"github.com/lestrrat-go/jwx/v2/jwa"
 	"github.com/lestrrat-go/jwx/v2/jwk"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/skandragon/grpc-datacon/app/server/cncserver"
 	"github.com/skandragon/grpc-datacon/internal/ca"
 	"github.com/skandragon/grpc-datacon/internal/jwtutil"
 	"github.com/skandragon/grpc-datacon/internal/secrets"
@@ -341,8 +342,8 @@ func main() {
 
 	//endpoints = serviceconfig.ConfigureEndpoints(secretsLoader, &config.ServiceConfig)
 
-	//	cnc := cncserver.MakeCNCServer(config, authority, routes, version.GitBranch())
-	//	go cnc.RunServer(*serverCert)
+	cnc := cncserver.MakeCNCServer(config, authority, cncserver.FakeStats(), version.GitBranch(), nil)
+	go cnc.RunServer(*serverCert)
 
 	go runAgentGRPCServer(ctx, config.AgentUseTLS, serverCert)
 

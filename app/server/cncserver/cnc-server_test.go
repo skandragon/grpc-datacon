@@ -237,7 +237,7 @@ func TestCNCServer_generateAgentManifestComponents(t *testing.T) {
 		assert.Equal(t, "agent smith", response.AgentName)
 		assert.Equal(t, "agent.local", response.ServerHostname)
 		assert.Equal(t, "1234", fmt.Sprintf("%d", response.ServerPort))
-		assert.Equal(t, "eyJhbGciOiJIUzI1NiIsImtpZCI6ImFnZW50a2V5MSIsInR5cCI6IkpXVCJ9.eyJhIjoiYWdlbnQgc21pdGgiLCJpYXQiOjEyMzQsImlzcyI6Im9wc214In0.17tJL5QhUAgpiNT74QxGYL5Hmx8k6LEP9lFRgO9Bdug", response.AgentToken)
+		assert.Equal(t, "eyJhbGciOiJIUzI1NiIsImtpZCI6ImFnZW50a2V5MSIsInR5cCI6IkpXVCJ9.eyJpYXQiOjEyMzQsImlzcyI6Im9wc214LWFnZW50LWF1dGgiLCJvcHNteC5hZ2VudC5uYW1lIjoiYWdlbnQgc21pdGgifQ.FokYFik8LQ0mH7NksB3tM283nUDh8qGAGXilMc--fw8", response.AgentToken)
 		assert.Equal(t, "base64-cacert", response.CACert)
 	}
 

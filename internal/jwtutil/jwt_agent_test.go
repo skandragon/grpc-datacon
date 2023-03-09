@@ -17,7 +17,7 @@
 package jwtutil
 
 import (
-	"log"
+	"fmt"
 	"testing"
 
 	"github.com/lestrrat-go/jwx/v2/jwt"
@@ -41,7 +41,7 @@ func TestMakeAgentJWT(t *testing.T) {
 			"key1",
 			"agent1",
 			&jwtregistry.TimeClock{NowTime: 1111},
-			"eyJhbGciOiJIUzI1NiIsImtpZCI6ImtleTEiLCJ0eXAiOiJKV1QifQ.eyJhIjoiYWdlbnQxIiwiaWF0IjoxMTExLCJpc3MiOiJvcHNteCJ9.LCY0c8SsPQsrwTjAQ6ckBYEQEBC6kV_XWlP8vwYoGsA",
+			"eyJhbGciOiJIUzI1NiIsImtpZCI6ImtleTEiLCJ0eXAiOiJKV1QifQ.eyJpYXQiOjExMTEsImlzcyI6Im9wc214LWFnZW50LWF1dGgiLCJvcHNteC5hZ2VudC5uYW1lIjoiYWdlbnQxIn0.fRE1PyLaHngNlPrQ5D3jN-LlgS_mWvxO_yWFgFNx2wE",
 			false,
 		},
 	}
@@ -117,7 +117,7 @@ func TestValidateAgentJWT(t *testing.T) {
 		{
 			"valid",
 			makeToken(agentRegistryName, map[string]string{
-				jwtAgentKey: "agent1",
+				claimOpsmxAgentName: "agent1",
 			}, clock),
 			clock,
 			"agent1",
@@ -131,18 +131,17 @@ func TestValidateAgentJWT(t *testing.T) {
 			`"iss" not satisfied: values do not match`,
 		},
 		{
-			"missing-a",
+			"missing-sub",
 			makeToken(agentRegistryName, map[string]string{}, clock),
 			clock,
 			"",
-			`no 'a' key in JWT claims`,
+			fmt.Sprintf(`no '%s' key in JWT claims`, claimOpsmxAgentName),
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			gotAgent, err := ValidateAgentJWT(tt.token, tt.clock)
 			if tt.wantErrString != "" {
-				log.Printf("%s: token: %s", tt.name, tt.token)
 				require.EqualError(t, err, tt.wantErrString)
 				return
 			}
