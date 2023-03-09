@@ -43,10 +43,11 @@ type server struct {
 func (s *server) Hello(ctx context.Context, in *pb.HelloRequest) (*pb.HelloResponse, error) {
 	agentID, _ := IdentityFromContext(ctx)
 	_, logger := loggerFromContext(ctx)
-	logger.Infof("Hello")
+	logger.Infof("Hello", "endpoints", in.Endpoints, "annotations", in.Annotations)
 	session := s.registerAgentSession(agentID, ulid.GlobalContext.Ulid())
 	return &pb.HelloResponse{
 		InstanceId: session.sessionID,
+		AgentId:    agentID,
 	}, nil
 }
 

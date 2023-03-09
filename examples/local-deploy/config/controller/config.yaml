@@ -28,12 +28,6 @@ services:
       useHTTP: true
       destination: smith
       destinationService: whoami
-    - name: agent-whoami-loop
-      serviceType: whoami
-      port: 8012
-      useHTTP: true
-      destination: smith
-      destinationService: whoami-loop
     - name: controller-nosuchsercvice
       serviceType: x-notthere
       port: 8013
