@@ -32,6 +32,7 @@ import (
 type ControllerConfig struct {
 	Agents               map[string]*agentConfig     `yaml:"agents,omitempty"`
 	ServiceAuth          serviceAuthConfig           `yaml:"serviceAuth,omitempty"`
+	AgentAuth            agentAuthConfig             `yaml:"agentAuth,omitempty"`
 	Webhook              string                      `yaml:"webhook,omitempty"`
 	ServerNames          []string                    `yaml:"serverNames,omitempty"`
 	CAConfig             ca.Config                   `yaml:"caConfig,omitempty"`
@@ -55,6 +56,11 @@ type serviceAuthConfig struct {
 	CurrentKeyName        string `yaml:"currentKeyName,omitempty"`
 	HeaderMutationKeyName string `yaml:"headerMutationKeyName,omitempty"`
 	SecretsPath           string `yaml:"secretsPath,omitempty"`
+}
+
+type agentAuthConfig struct {
+	CurrentKeyName string `yaml:"currentKeyName,omitempty"`
+	SecretsPath    string `yaml:"secretsPath,omitempty"`
 }
 
 // LoadConfig will load YAML configuration from the provided filename,
@@ -102,6 +108,10 @@ func LoadConfig(f io.Reader) (*ControllerConfig, error) {
 
 	if len(config.ServiceAuth.SecretsPath) == 0 {
 		config.ServiceAuth.SecretsPath = "/app/secrets/serviceAuth"
+	}
+
+	if len(config.AgentAuth.SecretsPath) == 0 {
+		config.AgentAuth.SecretsPath = "/app/secrets/agentAuth"
 	}
 
 	config.addAllHostnames()

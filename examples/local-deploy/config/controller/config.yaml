@@ -11,6 +11,9 @@ serviceAuth:
   currentKeyName: key1
   headerMutationKeyName: key2
   secretsPath: not-actually
+agentAuth:
+  currentKeyName: agent-key1
+  secretsPath: agentauth-keys
 services:
   outgoingServices:
     - name: whoami

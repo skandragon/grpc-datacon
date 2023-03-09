@@ -59,11 +59,13 @@ var (
 
 	tracerProvider *tracer.TracerProvider
 
-	jwtKeyset     = jwk.NewSet()
-	jwtCurrentKey string
-	config        *ControllerConfig
-	secretsLoader secrets.SecretLoader
-	authority     *ca.CA
+	serviceKeyset     = jwk.NewSet()
+	agentKeyset       = jwk.NewSet()
+	currentServiceKey string
+	currentAgentKey   string
+	config            *ControllerConfig
+	secretsLoader     secrets.SecretLoader
+	authority         *ca.CA
 	//endpoints     []serviceconfig.ConfiguredEndpoint
 )
 
@@ -144,7 +146,7 @@ func runPrometheusHTTPServer(port uint16) {
 	log.Fatal(server.ListenAndServe())
 }
 
-func loadKeyset() {
+func loadServiceAuthKeyset() {
 	if config.ServiceAuth.CurrentKeyName == "" {
 		log.Fatalf("No primary serviceAuth key name provided")
 	}
@@ -161,7 +163,7 @@ func loadKeyset() {
 		if err != nil {
 			return err
 		}
-		key, err := jwk.ParseKey(content)
+		key, err := jwk.FromRaw(content)
 		if err != nil {
 			return err
 		}
@@ -173,7 +175,7 @@ func loadKeyset() {
 		if err != nil {
 			return err
 		}
-		jwtKeyset.AddKey(key)
+		serviceKeyset.AddKey(key)
 		log.Printf("Loaded service key name %s, length %d", info.Name(), len(content))
 		return nil
 	})
@@ -181,11 +183,11 @@ func loadKeyset() {
 		log.Fatalf("cannot load key serviceAuth keys: %v", err)
 	}
 
-	jwtCurrentKey = config.ServiceAuth.CurrentKeyName
-	if len(jwtCurrentKey) == 0 {
+	currentServiceKey = config.ServiceAuth.CurrentKeyName
+	if len(currentServiceKey) == 0 {
 		log.Fatal("serviceAuth.currentKeyName is not set")
 	}
-	if _, found := jwtKeyset.LookupKeyID(jwtCurrentKey); !found {
+	if _, found := serviceKeyset.LookupKeyID(currentServiceKey); !found {
 		log.Fatal("serviceAuth.currentKeyName is not in the loaded list of keys")
 	}
 
@@ -193,7 +195,55 @@ func loadKeyset() {
 		log.Fatal("serviceAuth.headerMutationKeyName is not set")
 	}
 
-	log.Printf("Loaded %d serviceKeys", jwtKeyset.Len())
+	log.Printf("Loaded %d serviceAuth keys", serviceKeyset.Len())
+}
+
+func loadAgentAuthKeyset() {
+	if config.AgentAuth.CurrentKeyName == "" {
+		log.Fatalf("No primary agentAuth key name provided")
+	}
+
+	err := filepath.WalkDir(config.AgentAuth.SecretsPath, func(path string, info fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		// skip not refular files
+		if !info.Type().IsRegular() {
+			return nil
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		key, err := jwk.FromRaw(content)
+		if err != nil {
+			return err
+		}
+		err = key.Set(jwk.KeyIDKey, info.Name())
+		if err != nil {
+			return err
+		}
+		err = key.Set(jwk.AlgorithmKey, jwa.HS256)
+		if err != nil {
+			return err
+		}
+		agentKeyset.AddKey(key)
+		log.Printf("Loaded agent key name %s, length %d", info.Name(), len(content))
+		return nil
+	})
+	if err != nil {
+		log.Fatalf("cannot load key agentAuth keys: %v", err)
+	}
+
+	currentAgentKey = config.AgentAuth.CurrentKeyName
+	if len(currentAgentKey) == 0 {
+		log.Fatal("agentAuth.currentKeyName is not set")
+	}
+	if _, found := agentKeyset.LookupKeyID(currentAgentKey); !found {
+		log.Fatal("agentAuth.currentKeyName is not in the loaded list of keys")
+	}
+
+	log.Printf("Loaded %d agentAuth keys", agentKeyset.Len())
 }
 
 func parseConfig(filename string) (*ControllerConfig, error) {
@@ -256,14 +306,18 @@ func main() {
 		log.Printf("POD_NAMESPACE not set.  Disabling Kubeernetes secret handling.")
 	}
 
-	loadKeyset()
+	loadServiceAuthKeyset()
+	loadAgentAuthKeyset()
 
 	// Create registry entries to sign and validate JWTs for service authentication,
 	// and protect x-spinnaker-user header.
-	if err = jwtutil.RegisterServiceKeyset(jwtKeyset, config.ServiceAuth.CurrentKeyName); err != nil {
+	if err = jwtutil.RegisterServiceKeyset(serviceKeyset, config.ServiceAuth.CurrentKeyName); err != nil {
 		log.Fatal(err)
 	}
-	if err = jwtutil.RegisterMutationKeyset(jwtKeyset, config.ServiceAuth.HeaderMutationKeyName); err != nil {
+	if err = jwtutil.RegisterMutationKeyset(serviceKeyset, config.ServiceAuth.HeaderMutationKeyName); err != nil {
+		log.Fatal(err)
+	}
+	if err = jwtutil.RegisterAgentKeyset(agentKeyset, config.AgentAuth.CurrentKeyName); err != nil {
 		log.Fatal(err)
 	}
 
