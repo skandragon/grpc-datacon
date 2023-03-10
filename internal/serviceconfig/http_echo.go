@@ -26,7 +26,7 @@ type HTTPEcho interface {
 	// Headers is called once to send the appropriate headers.
 	Headers(ctx context.Context, h *pb.TunnelHeaders) error
 	// Data is called one or more times to send data.
-	Data(ctx context.Context, d *pb.Data) error
+	Data(ctx context.Context, data []byte) error
 	// Fail can be called to indicate no more calls will be made.  This may happen
 	// without calling Headers() or Data(), or after calling one or both.  If
 	// headers have been sent, this should send a EOF Data frame.
@@ -34,5 +34,5 @@ type HTTPEcho interface {
 	// Done indicates the session ended.  If headers have not been sent,
 	// this is an error.  Data may not be called, and Done should send
 	// an EOF Data frame.
-	Done(ctx context.Context)
+	Done(ctx context.Context) error
 }

@@ -21,7 +21,6 @@ import (
 	"flag"
 	"fmt"
 	"io/fs"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -100,10 +99,10 @@ func (s *server) randomRequest(ctx context.Context) {
 	}
 	session.out <- &pb.TunnelRequest{
 		StreamId: ulid.GlobalContext.Ulid(),
-		Name:     "bobService",
-		Type:     "bobServiceType",
+		Name:     "whoami",
+		Type:     "whoami",
 		Method:   "GET",
-		URI:      "http://blog.flame.org/",
+		URI:      "/",
 	}
 }
 
@@ -121,20 +120,22 @@ func (s *server) requestOnTimer(ctx context.Context) {
 }
 
 func healthcheck(w http.ResponseWriter, r *http.Request) {
+	_, logger := loggerFromContext(r.Context())
 	w.Header().Set("content-type", "application/json")
 	w.WriteHeader(200)
 	n, err := w.Write([]byte("{}"))
 	if err != nil {
-		log.Printf("Error writing healthcheck response: %v", err)
+		logger.Warnf("Error writing healthcheck response: %v", err)
 		return
 	}
 	if n != 2 {
-		log.Printf("Failed to write 2 bytes: %d written", n)
+		logger.Warnf("Failed to write 2 bytes: %d written", n)
 	}
 }
 
-func runPrometheusHTTPServer(port uint16) {
-	log.Printf("Running HTTP listener for Prometheus on port %d", port)
+func runPrometheusHTTPServer(ctx context.Context, port uint16) {
+	_, logger := loggerFromContext(ctx)
+	logger.Infof("Running HTTP listener for Prometheus on port %d", port)
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
@@ -145,19 +146,21 @@ func runPrometheusHTTPServer(port uint16) {
 		Addr:    fmt.Sprintf(":%d", port),
 		Handler: mux,
 	}
-	log.Fatal(server.ListenAndServe())
+	logger.Fatal(server.ListenAndServe())
 }
 
-func loadServiceAuthKeyset() {
+func loadServiceAuthKeyset(ctx context.Context) {
+	_, logger := loggerFromContext(ctx)
+
 	if config.ServiceAuth.CurrentKeyName == "" {
-		log.Fatalf("No primary serviceAuth key name provided")
+		logger.Fatalf("No primary serviceAuth key name provided")
 	}
 
 	err := filepath.WalkDir(config.ServiceAuth.SecretsPath, func(path string, info fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		// skip not refular files
+		// skip not regular files
 		if !info.Type().IsRegular() {
 			return nil
 		}
@@ -178,38 +181,39 @@ func loadServiceAuthKeyset() {
 			return err
 		}
 		serviceKeyset.AddKey(key)
-		log.Printf("Loaded service key name %s, length %d", info.Name(), len(content))
+		logger.Infof("Loaded service key name %s, length %d", info.Name(), len(content))
 		return nil
 	})
 	if err != nil {
-		log.Fatalf("cannot load key serviceAuth keys: %v", err)
+		logger.Fatalf("cannot load key serviceAuth keys: %v", err)
 	}
 
 	currentServiceKey = config.ServiceAuth.CurrentKeyName
 	if len(currentServiceKey) == 0 {
-		log.Fatal("serviceAuth.currentKeyName is not set")
+		logger.Fatal("serviceAuth.currentKeyName is not set")
 	}
 	if _, found := serviceKeyset.LookupKeyID(currentServiceKey); !found {
-		log.Fatal("serviceAuth.currentKeyName is not in the loaded list of keys")
+		logger.Fatal("serviceAuth.currentKeyName is not in the loaded list of keys")
 	}
 
 	if len(config.ServiceAuth.HeaderMutationKeyName) == 0 {
-		log.Fatal("serviceAuth.headerMutationKeyName is not set")
+		logger.Fatal("serviceAuth.headerMutationKeyName is not set")
 	}
 
-	log.Printf("Loaded %d serviceAuth keys", serviceKeyset.Len())
+	logger.Infof("Loaded %d serviceAuth keys", serviceKeyset.Len())
 }
 
-func loadAgentAuthKeyset() {
+func loadAgentAuthKeyset(ctx context.Context) {
+	_, logger := loggerFromContext(ctx)
 	if config.AgentAuth.CurrentKeyName == "" {
-		log.Fatalf("No primary agentAuth key name provided")
+		logger.Fatalf("No primary agentAuth key name provided")
 	}
 
 	err := filepath.WalkDir(config.AgentAuth.SecretsPath, func(path string, info fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		// skip not refular files
+		// skip not regular files
 		if !info.Type().IsRegular() {
 			return nil
 		}
@@ -230,36 +234,37 @@ func loadAgentAuthKeyset() {
 			return err
 		}
 		agentKeyset.AddKey(key)
-		log.Printf("Loaded agent key name %s, length %d", info.Name(), len(content))
+		logger.Infof("Loaded agent key name %s, length %d", info.Name(), len(content))
 		return nil
 	})
 	if err != nil {
-		log.Fatalf("cannot load key agentAuth keys: %v", err)
+		logger.Fatalf("cannot load key agentAuth keys: %v", err)
 	}
 
 	currentAgentKey = config.AgentAuth.CurrentKeyName
 	if len(currentAgentKey) == 0 {
-		log.Fatal("agentAuth.currentKeyName is not set")
+		logger.Fatal("agentAuth.currentKeyName is not set")
 	}
 	if _, found := agentKeyset.LookupKeyID(currentAgentKey); !found {
-		log.Fatal("agentAuth.currentKeyName is not in the loaded list of keys")
+		logger.Fatal("agentAuth.currentKeyName is not in the loaded list of keys")
 	}
 
-	log.Printf("Loaded %d agentAuth keys", agentKeyset.Len())
+	logger.Infof("Loaded %d agentAuth keys", agentKeyset.Len())
 }
 
-func parseConfig(filename string) (*ControllerConfig, error) {
-	f, err := os.Open(*configFile)
-	if err != nil {
-		return nil, fmt.Errorf("while opening configfile: %w", err)
+func getSecretsLoader(ctx context.Context) *secrets.KubernetesSecretLoader {
+	_, logger := loggerFromContext(ctx)
+	namespace, ok := os.LookupEnv("POD_NAMESPACE")
+	if !ok {
+		logger.Infof("POD_NAMESPACE not set.  Disabling Kubeernetes secret handling.")
+		return nil
 	}
-
-	c, err := LoadConfig(f)
-	if err != nil {
-		return nil, fmt.Errorf("while loading config: %w", err)
+	if secretsLoader, err := secrets.MakeKubernetesSecretLoader(namespace); err == nil {
+		return secretsLoader
+	} else {
+		logger.Fatal(err)
 	}
-
-	return c, nil
+	return nil
 }
 
 func main() {
@@ -294,33 +299,24 @@ func main() {
 
 	config, err = parseConfig(*configFile)
 	if err != nil {
-		log.Fatalf("%v", err)
+		logger.Fatalf("%v", err)
 	}
 	config.Dump()
 
-	namespace, ok := os.LookupEnv("POD_NAMESPACE")
-	if ok {
-		secretsLoader, err = secrets.MakeKubernetesSecretLoader(namespace)
-		if err != nil {
-			log.Fatal(err)
-		}
-	} else {
-		log.Printf("POD_NAMESPACE not set.  Disabling Kubeernetes secret handling.")
-	}
-
-	loadServiceAuthKeyset()
-	loadAgentAuthKeyset()
+	secretsLoader = getSecretsLoader(ctx)
+	loadServiceAuthKeyset(ctx)
+	loadAgentAuthKeyset(ctx)
 
 	// Create registry entries to sign and validate JWTs for service authentication,
 	// and protect x-spinnaker-user header.
 	if err = jwtutil.RegisterServiceKeyset(serviceKeyset, config.ServiceAuth.CurrentKeyName); err != nil {
-		log.Fatal(err)
+		logger.Fatal(err)
 	}
 	if err = jwtutil.RegisterMutationKeyset(serviceKeyset, config.ServiceAuth.HeaderMutationKeyName); err != nil {
-		log.Fatal(err)
+		logger.Fatal(err)
 	}
 	if err = jwtutil.RegisterAgentKeyset(agentKeyset, config.AgentAuth.CurrentKeyName); err != nil {
-		log.Fatal(err)
+		logger.Fatal(err)
 	}
 
 	//
@@ -328,17 +324,17 @@ func main() {
 	//
 	caLocal, err := ca.LoadCAFromFile(config.CAConfig)
 	if err != nil {
-		log.Fatalf("Cannot create authority: %v", err)
+		logger.Fatalf("Cannot create authority: %v", err)
 	}
 	authority = caLocal
 
 	//
 	// Make a server certificate.
 	//
-	log.Println("Generating a server certificate...")
+	logger.Infof("Generating a server certificate...")
 	serverCert, err := authority.MakeServerCert(config.ServerNames)
 	if err != nil {
-		log.Fatalf("Cannot make server certificate: %v", err)
+		logger.Fatalf("Cannot make server certificate: %v", err)
 	}
 
 	endpoints = serviceconfig.ConfigureEndpoints(ctx, secretsLoader, &config.ServiceConfig)
@@ -363,7 +359,7 @@ func main() {
 	//		}
 	//	}
 
-	go runPrometheusHTTPServer(config.PrometheusListenPort)
+	go runPrometheusHTTPServer(ctx, config.PrometheusListenPort)
 
 	agentJWT, err := jwtutil.MakeAgentJWT("smith", nil)
 	if err != nil {
@@ -372,5 +368,5 @@ func main() {
 	logger.Infow("sample agent JWT", "jwt", agentJWT, "name", "smith")
 
 	<-sigchan
-	log.Printf("Exiting Cleanly")
+	logger.Infof("Exiting Cleanly")
 }

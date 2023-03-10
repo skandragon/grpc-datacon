@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
 
 	"github.com/skandragon/grpc-datacon/internal/ca"
 	"github.com/skandragon/grpc-datacon/internal/serviceconfig"
@@ -182,4 +183,18 @@ func (c *ControllerConfig) Dump() {
 		*c.AgentHostname, c.AgentListenPort, c.AgentAdvertisePort)
 	log.Printf("Control hostname: %s, port %d",
 		*c.ControlHostname, c.ControlListenPort)
+}
+
+func parseConfig(filename string) (*ControllerConfig, error) {
+	f, err := os.Open(*configFile)
+	if err != nil {
+		return nil, fmt.Errorf("while opening configfile: %w", err)
+	}
+
+	c, err := LoadConfig(f)
+	if err != nil {
+		return nil, fmt.Errorf("while loading config: %w", err)
+	}
+
+	return c, nil
 }

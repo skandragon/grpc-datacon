@@ -23,8 +23,10 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"flag"
+	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"runtime"
 	"strings"
@@ -138,10 +140,25 @@ func waitForRequest(ctx context.Context, c pb.TunnelServiceClient) error {
 			"serviceType", req.Type,
 			"uri", req.URI,
 			"bodyLength", len(req.Body))
+
 		// TODO: implement endpoint search and dispatch request
-		//		ep, found := findEndpoint()
-		//		go dispatchRequest(ctx, c, req)
+		echo := MakeEcho(ctx, c, req.StreamId)
+		ep, found := findEndpoint(ctx, req.Name, req.Type)
+		if !found {
+			echo.Fail(ctx, http.StatusBadGateway, fmt.Errorf("no such service on agent"))
+			continue
+		}
+		go ep.Instance.ExecuteHTTPRequest(ctx, session.agentID, echo, req)
 	}
+}
+
+func findEndpoint(ctx context.Context, serviceName string, serviceType string) (*serviceconfig.ConfiguredEndpoint, bool) {
+	for _, ep := range endpoints {
+		if ep.Name == serviceName && ep.Type == serviceType {
+			return &ep, true
+		}
+	}
+	return nil, false
 }
 
 func pinger(ctx context.Context, c pb.TunnelServiceClient, tickTime int) error {

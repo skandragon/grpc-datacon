@@ -1,5 +1,5 @@
 /*
- * Copyright 2021 OpsMx, Inc.
+ * Copyright 2021-2023 OpsMx, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License")
  * you may not use this file except in compliance with the License.
@@ -388,10 +388,10 @@ func RunHTTPRequest(ctx context.Context, client *http.Client, req *pb.TunnelRequ
 		buf := make([]byte, 10240)
 		n, err := httpResponse.Body.Read(buf)
 		if n > 0 {
-			echo.Data(ctx, &pb.Data{StreamId: req.StreamId, Data: buf[:n]})
+			echo.Data(ctx, buf[:n])
 		}
 		if err == io.EOF {
-			echo.Data(ctx, &pb.Data{StreamId: req.StreamId, Data: []byte{}})
+			echo.Done(ctx)
 			return
 		}
 		if err == context.Canceled {
@@ -402,7 +402,6 @@ func RunHTTPRequest(ctx context.Context, client *http.Client, req *pb.TunnelRequ
 			err = fmt.Errorf("Got error on HTTP read: %v", err)
 			logger.Warn(err)
 			echo.Fail(ctx, http.StatusBadGateway, err)
-			echo.Data(ctx, &pb.Data{StreamId: req.StreamId, Data: []byte{}})
 			return
 		}
 	}
