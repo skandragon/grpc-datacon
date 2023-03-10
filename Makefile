@@ -29,7 +29,7 @@ BINARIES = client server make-ca get-creds
 # These are the targets for Docker images, used both for the multi-arch and
 # single (local) Docker builds.
 # Dockerfiles should have a target that ends in -image, e.g. agent-image.
-IMAGE_TARGETS = client server
+IMAGE_TARGETS = agent-image controller-image
 
 #
 # Below here lies magic...
