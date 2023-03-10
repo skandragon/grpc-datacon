@@ -65,7 +65,7 @@ ENTRYPOINT ["/bin/sh", "/app/run.sh"]
 #
 # Build the agent image.  This should be a --target on docker build.
 #
-FROM base-image AS agent-image
+FROM base-image AS agent-client-image
 WORKDIR /app
 COPY --from=build-client-binaries /out/agent-client /app
 EXPOSE 9102
@@ -76,7 +76,7 @@ CMD ["/app/agent-client"]
 # Note that the agent is also added, so the binary can be served from
 # the controller to auto-update the remote agent.
 #
-FROM base-image AS controller-image
+FROM base-image AS agent-controller-image
 WORKDIR /app
 COPY --from=build-server-binaries /out/agent-controller /app
 COPY --from=build-server-binaries /out/make-ca /app
