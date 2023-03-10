@@ -40,6 +40,7 @@ import (
 	"github.com/skandragon/grpc-datacon/internal/ca"
 	"github.com/skandragon/grpc-datacon/internal/jwtutil"
 	"github.com/skandragon/grpc-datacon/internal/secrets"
+	"github.com/skandragon/grpc-datacon/internal/serviceconfig"
 	pb "github.com/skandragon/grpc-datacon/internal/tunnel"
 	"github.com/skandragon/grpc-datacon/internal/ulid"
 	"google.golang.org/grpc/keepalive"
@@ -67,7 +68,7 @@ var (
 	config            *ControllerConfig
 	secretsLoader     secrets.SecretLoader
 	authority         *ca.CA
-	//endpoints     []serviceconfig.ConfiguredEndpoint
+	endpoints         []serviceconfig.ConfiguredEndpoint
 )
 
 var kaep = keepalive.EnforcementPolicy{
@@ -340,7 +341,7 @@ func main() {
 		log.Fatalf("Cannot make server certificate: %v", err)
 	}
 
-	//endpoints = serviceconfig.ConfigureEndpoints(secretsLoader, &config.ServiceConfig)
+	endpoints = serviceconfig.ConfigureEndpoints(ctx, secretsLoader, &config.ServiceConfig)
 
 	cnc := cncserver.MakeCNCServer(config, authority, cncserver.FakeStats(), version.GitBranch(), nil)
 	go cnc.RunServer(*serverCert)
