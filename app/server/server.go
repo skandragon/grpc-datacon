@@ -20,7 +20,6 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"sync"
@@ -127,13 +126,11 @@ func (s *server) findStream(ctx context.Context, streamID string) (serviceconfig
 }
 
 func (s *server) SendHeaders(ctx context.Context, in *pb.TunnelHeaders) (*pb.SendHeadersResponse, error) {
-	log.Printf("SendHeaders called")
 	ctx, _ = loggerFromContext(ctx, zap.String("streamID", in.StreamId))
 	echo, found := s.findStream(ctx, in.StreamId)
 	if !found {
 		return &pb.SendHeadersResponse{}, status.Error(codes.InvalidArgument, "no such streamID")
 	}
-	log.Printf("Found streamID %s", in.StreamId)
 	err := echo.Headers(ctx, in)
 	return &pb.SendHeadersResponse{}, err
 }
@@ -159,7 +156,6 @@ func (s *server) SendData(stream pb.TunnelService_SendDataServer) error {
 				return status.Error(codes.InvalidArgument, "no such streamID")
 			}
 			defer s.unregisterStream(ctx, streamID)
-			log.Printf("Found streamID %s", streamID)
 		}
 		if len(data.Data) == 0 {
 			if err := echo.Done(ctx); err != nil {
