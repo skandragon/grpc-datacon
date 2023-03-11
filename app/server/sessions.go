@@ -22,13 +22,12 @@ import (
 	"time"
 
 	"github.com/skandragon/grpc-datacon/internal/logging"
-	pb "github.com/skandragon/grpc-datacon/internal/tunnel"
 	"go.uber.org/zap"
 )
 
 type agentContext struct {
 	agentKey
-	out      chan *pb.TunnelRequest
+	out      chan serviceRequest
 	lastUsed int64
 }
 
@@ -41,7 +40,7 @@ func newAgentContext(agentID string, sessionID string) (*agentContext, agentKey)
 	key := agentKey{agentID: agentID, sessionID: sessionID}
 	session := &agentContext{
 		agentKey: key,
-		out:      make(chan *pb.TunnelRequest),
+		out:      make(chan serviceRequest),
 		lastUsed: time.Now().UnixNano(),
 	}
 	return session, key

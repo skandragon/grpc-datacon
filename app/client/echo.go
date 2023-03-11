@@ -56,20 +56,21 @@ func (e *AgentEcho) RunDataSender(ctx context.Context) {
 	stream, err := e.c.SendData(ctx)
 	defer stream.CloseSend()
 	if err != nil {
-		logger.Errorf("e.c.SendData(%s): %v", e.streamID, err)
+		logger.Errorf("e.c.SendData(): %v", err)
 	}
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Infof("Run(%s) context done", e.streamID)
+			logger.Infof("Run() context done")
 			return
 		case d, more := <-e.dchan:
 			if !more {
+				logger.Infof("RunDataSender() exiting")
 				return
 			}
 			err := stream.Send(d)
 			if err != nil {
-				logger.Errorf("stream.Send(%s): %v", e.streamID, err)
+				logger.Errorf("stream.Send(): %v", err)
 			}
 		}
 	}
@@ -81,7 +82,8 @@ func (e *AgentEcho) Headers(ctx context.Context, h *pb.TunnelHeaders) error {
 	}
 	h.StreamId = e.streamID
 	e.state = stateData
-	return nil
+	_, err := e.c.SendHeaders(ctx, h)
+	return err
 }
 
 func (e *AgentEcho) Data(ctx context.Context, data []byte) error {

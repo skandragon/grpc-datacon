@@ -208,36 +208,6 @@ func (ep *GenericEndpoint) unmutateURI(typ string, method string, uri string, cl
 	return uri, nil
 }
 
-func containsFolded(l []string, t string) bool {
-	for i := 0; i < len(l); i++ {
-		if strings.EqualFold(l[i], t) {
-			return true
-		}
-	}
-	return false
-}
-
-var mutatedHeaders = []string{"X-Spinnaker-User"}
-
-func CopyHeaders(headers []*pb.HttpHeader, out *http.Header) error {
-	for _, header := range headers {
-		if jwtutil.MutationIsRegistered() && containsFolded(mutatedHeaders, header.Name) {
-			// only handle the first value here as well
-			value := header.Values[0]
-			unmutated, err := jwtutil.UnmutateHeader([]byte(value), nil)
-			if err != nil {
-				return err
-			}
-			out.Add(header.Name, unmutated)
-		} else {
-			for _, value := range header.Values {
-				out.Add(header.Name, value)
-			}
-		}
-	}
-	return nil
-}
-
 // ExecuteHTTPRequest does the actual call to connect to HTTP, and will send the data back over the
 // tunnel.
 func (ep *GenericEndpoint) ExecuteHTTPRequest(ctx context.Context, agentName string, echo HTTPEcho, req *pb.TunnelRequest) error {
@@ -273,7 +243,7 @@ func (ep *GenericEndpoint) ExecuteHTTPRequest(ctx context.Context, agentName str
 		return echo.Fail(ctx, http.StatusBadGateway, err)
 	}
 
-	err = CopyHeaders(req.Headers, &httpRequest.Header)
+	err = PBHEadersToHTTP(req.Headers, &httpRequest.Header)
 	if err != nil {
 		err = fmt.Errorf("failed to copy headers: %v", err)
 		logger.Error(err)
@@ -314,28 +284,8 @@ func (ep *GenericEndpoint) ExecuteHTTPRequest(ctx context.Context, agentName str
 	return nil
 }
 
-var strippedOutgoingHeaders = []string{"Authorization"}
-
-func MakeHeaders(headers map[string][]string) (ret []*pb.HttpHeader, err error) {
-	ret = make([]*pb.HttpHeader, 0)
-	for name, values := range headers {
-		if jwtutil.MutationIsRegistered() && containsFolded(mutatedHeaders, name) {
-			// only handle the first item in the list, which is typical here
-			value := values[0]
-			mutated, err := jwtutil.MutateHeader(value, nil)
-			if err != nil {
-				return nil, err
-			}
-			ret = append(ret, &pb.HttpHeader{Name: name, Values: []string{string(mutated)}})
-		} else if !containsFolded(strippedOutgoingHeaders, name) {
-			ret = append(ret, &pb.HttpHeader{Name: name, Values: values})
-		}
-	}
-	return ret, nil
-}
-
 func makeResponse(id string, response *http.Response) (*pb.TunnelHeaders, error) {
-	headers, err := MakeHeaders(response.Header)
+	headers, err := HTTPHeadersToPB(response.Header)
 	if err != nil {
 		return nil, err
 	}

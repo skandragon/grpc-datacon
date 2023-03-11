@@ -20,10 +20,13 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"log"
 	"net"
+	"net/http"
 	"sync"
 	"time"
 
+	"github.com/skandragon/grpc-datacon/internal/serviceconfig"
 	pb "github.com/skandragon/grpc-datacon/internal/tunnel"
 	"github.com/skandragon/grpc-datacon/internal/ulid"
 	"go.uber.org/zap"
@@ -38,12 +41,13 @@ type server struct {
 	sync.Mutex
 	agentIdleTimeout int64
 	agents           map[agentKey]*agentContext
+	streams          map[string]serviceconfig.HTTPEcho
 }
 
 func (s *server) Hello(ctx context.Context, in *pb.HelloRequest) (*pb.HelloResponse, error) {
 	agentID, _ := IdentityFromContext(ctx)
 	_, logger := loggerFromContext(ctx)
-	logger.Infof("Hello", "endpoints", in.Endpoints, "annotations", in.Annotations)
+	logger.Infow("Hello", "endpoints", in.Endpoints, "annotations", in.Annotations)
 	session := s.registerAgentSession(agentID, ulid.GlobalContext.Ulid())
 	return &pb.HelloResponse{
 		InstanceId: session.sessionID,
@@ -67,6 +71,11 @@ func (s *server) Ping(ctx context.Context, in *pb.PingRequest) (*pb.PingResponse
 	return r, nil
 }
 
+type serviceRequest struct {
+	req  *pb.TunnelRequest
+	echo serviceconfig.HTTPEcho
+}
+
 func (s *server) WaitForRequest(in *pb.WaitForRequestArgs, stream pb.TunnelService_WaitForRequestServer) error {
 	ctx, logger := loggerFromContext(stream.Context())
 	logger.Infof("WaitForRequest")
@@ -81,15 +90,16 @@ func (s *server) WaitForRequest(in *pb.WaitForRequestArgs, stream pb.TunnelServi
 		case <-ctx.Done():
 			logger.Infow("closed connection")
 			return status.Error(codes.Canceled, "client closed connection")
-		case r := <-session.out:
+		case sr := <-session.out:
 			logger.Infow("->TunnelRequest",
-				"streamID", r.StreamId,
-				"method", r.Method,
-				"serviceName", r.Name,
-				"serviceType", r.Type,
-				"uri", r.URI,
-				"bodyLength", len(r.Body))
-			if err := stream.Send(r); err != nil {
+				"streamID", sr.req.StreamId,
+				"method", sr.req.Method,
+				"serviceName", sr.req.Name,
+				"serviceType", sr.req.Type,
+				"uri", sr.req.URI,
+				"bodyLength", len(sr.req.Body))
+			s.registerStream(ctx, sr.req.StreamId, sr.echo)
+			if err := stream.Send(sr.req); err != nil {
 				logger.Errorw("WaitForRequest stream.Send() failed, dropping agent", "error", err)
 				return status.Error(codes.Canceled, "send failed")
 			}
@@ -97,36 +107,71 @@ func (s *server) WaitForRequest(in *pb.WaitForRequestArgs, stream pb.TunnelServi
 	}
 }
 
+func (s *server) registerStream(ctx context.Context, streamID string, echo serviceconfig.HTTPEcho) {
+	s.Lock()
+	defer s.Unlock()
+	s.streams[streamID] = echo
+}
+
+func (s *server) unregisterStream(ctx context.Context, streamID string) {
+	s.Lock()
+	defer s.Unlock()
+	delete(s.streams, streamID)
+}
+
+func (s *server) findStream(ctx context.Context, streamID string) (serviceconfig.HTTPEcho, bool) {
+	s.Lock()
+	defer s.Unlock()
+	echo, found := s.streams[streamID]
+	return echo, found
+}
+
 func (s *server) SendHeaders(ctx context.Context, in *pb.TunnelHeaders) (*pb.SendHeadersResponse, error) {
-	ctx, logger := loggerFromContext(ctx, zap.String("streamID", in.StreamId))
-	_, err := s.findAgentSessionContext(ctx)
-	if err != nil {
-		return nil, status.Error(codes.FailedPrecondition, "Hello must be called first")
+	log.Printf("SendHeaders called")
+	ctx, _ = loggerFromContext(ctx, zap.String("streamID", in.StreamId))
+	echo, found := s.findStream(ctx, in.StreamId)
+	if !found {
+		return &pb.SendHeadersResponse{}, status.Error(codes.InvalidArgument, "no such streamID")
 	}
-	logger.Infow("SendHeaders",
-		"contentLength", in.ContentLength,
-		"headersLength", len(in.Headers),
-		"statusCode", in.Status)
-	return &pb.SendHeadersResponse{}, nil
+	log.Printf("Found streamID %s", in.StreamId)
+	err := echo.Headers(ctx, in)
+	return &pb.SendHeadersResponse{}, err
 }
 
 func (s *server) SendData(stream pb.TunnelService_SendDataServer) error {
-	var logger *zap.SugaredLogger
+	var echo serviceconfig.HTTPEcho
+	ctx := stream.Context()
+	var streamID string
 	for {
 		data, err := stream.Recv()
 		if err != nil {
-			_, logger = loggerFromContext(stream.Context(), zap.String("streamID", "--UNKNOWN--"))
-			logger.Warnw("SendData", "error", err)
+			if echo != nil {
+				_ = echo.Fail(ctx, http.StatusTeapot, err)
+			}
 			return err
 		}
-		if logger == nil {
-			_, logger = loggerFromContext(stream.Context(), zap.String("streamID", data.StreamId))
+		if echo == nil {
+			streamID = data.StreamId
+			ctx, _ = loggerFromContext(ctx, zap.String("streamID", streamID))
+			var found bool
+			echo, found = s.findStream(ctx, streamID)
+			if !found {
+				return status.Error(codes.InvalidArgument, "no such streamID")
+			}
+			defer s.unregisterStream(ctx, streamID)
+			log.Printf("Found streamID %s", streamID)
 		}
 		if len(data.Data) == 0 {
-			logger.Infow("SendData stream ended with length 0 (EOF)")
+			if err := echo.Done(ctx); err != nil {
+				_ = echo.Fail(ctx, http.StatusTeapot, err)
+				return status.Error(codes.Internal, fmt.Sprintf("echo.Done() failed: %v", err))
+			}
 			return nil
 		}
-		logger.Infow("SendData", "dataLength", len(data.Data))
+		if err := echo.Data(ctx, data.Data); err != nil {
+			_ = echo.Fail(ctx, http.StatusTeapot, err)
+			return status.Error(codes.Internal, fmt.Sprintf("echo.Data() failed: %v", err))
+		}
 	}
 }
 
@@ -143,6 +188,7 @@ func runAgentGRPCServer(ctx context.Context, useTLS bool, serverCert *tls.Certif
 	sconfig := &server{
 		agentIdleTimeout: idleTimeout.Nanoseconds(),
 		agents:           map[agentKey]*agentContext{},
+		streams:          map[string]serviceconfig.HTTPEcho{},
 	}
 
 	cleanerCtx, cleanerCancel := context.WithCancel(ctx)

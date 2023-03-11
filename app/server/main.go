@@ -97,12 +97,16 @@ func (s *server) randomRequest(ctx context.Context) {
 	if session == nil {
 		return
 	}
-	session.out <- &pb.TunnelRequest{
-		StreamId: ulid.GlobalContext.Ulid(),
-		Name:     "whoami",
-		Type:     "whoami",
-		Method:   "GET",
-		URI:      "/",
+	streamID := ulid.GlobalContext.Ulid()
+	session.out <- serviceRequest{
+		req: &pb.TunnelRequest{
+			StreamId: streamID,
+			Name:     "whoami",
+			Type:     "whoami",
+			Method:   "GET",
+			URI:      "/",
+		},
+		echo: MakeEcho(ctx, streamID),
 	}
 }
 
