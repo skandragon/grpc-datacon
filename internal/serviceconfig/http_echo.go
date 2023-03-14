@@ -1,5 +1,5 @@
 /*
- * Copyright 2021 OpsMx, Inc.
+ * Copyright 2023 OpsMx, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License")
  * you may not use this file except in compliance with the License.
@@ -22,6 +22,18 @@ import (
 	pb "github.com/skandragon/grpc-datacon/internal/tunnel"
 )
 
+// HTTPEcho is an interface that makes generic http services possible.  For
+// the "agent" side and "controller" side, different implementations can handle
+// an incoming or outgoing HTTP client and the underlying RPC calls needed to
+// exchange data.
+//
+// Data flow is Headers(), zero or more Data() calls with at least 1 byte of
+// data, and then a Done() call.  If any failure is to be indicated, Fail()
+// can be called at any time, and it will ensure that the RPC level protocol
+// is properly handled.
+//
+// After Done() is called, no other calls should be made.
+// After Fail() is called, no other calls should be made.
 type HTTPEcho interface {
 	// Headers is called once to send the appropriate headers.
 	Headers(ctx context.Context, h *pb.TunnelHeaders) error

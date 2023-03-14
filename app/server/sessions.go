@@ -19,39 +19,85 @@ package main
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/skandragon/grpc-datacon/internal/logging"
+	pb "github.com/skandragon/grpc-datacon/internal/tunnel"
 	"go.uber.org/zap"
 )
 
-type agentContext struct {
-	agentKey
-	out      chan serviceRequest
-	lastUsed int64
+type Endpoint struct {
+	Name        string            `json:"name,omitempty"`
+	Type        string            `json:"type,omitempty"`
+	Configured  bool              `json:"configured,omitempty"`
+	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
-type agentKey struct {
-	agentID   string
-	sessionID string
+type AgentContext struct {
+	AgentKey
+	Endpoints   []Endpoint    `json:"endpoints,omitempty"`
+	AgentInfo   *pb.AgentInfo `json:"agentInfo,omitempty"`
+	Version     string        `json:"version,omitempty"`
+	Hostname    string        `json:"hostname,omitempty"`
+	ConnectedAt int64         `json:"connectedAt,omitempty"`
+	LastPing    int64         `json:"lastPing,omitempty"`
+	LastUse     int64         `json:"lastUse,omitempty"`
+
+	out chan serviceRequest
 }
 
-func newAgentContext(agentID string, sessionID string) (*agentContext, agentKey) {
-	key := agentKey{agentID: agentID, sessionID: sessionID}
-	session := &agentContext{
-		agentKey: key,
-		out:      make(chan serviceRequest),
-		lastUsed: time.Now().UnixNano(),
+type AgentKey struct {
+	AgentID   string `json:"agentId,omitempty"`
+	SessionID string `json:"sessionId,omitempty"`
+}
+
+type AgentSessions struct {
+	sync.RWMutex
+	agents map[AgentKey]*AgentContext
+}
+
+func makeAgentSessions() *AgentSessions {
+	return &AgentSessions{
+		agents: map[AgentKey]*AgentContext{},
+	}
+}
+
+func newSessionContext(agentID string, sessionID string, hostname string, version string, agentInfo *pb.AgentInfo, endpoints []*pb.EndpointHealth) (*AgentContext, AgentKey) {
+	key := AgentKey{AgentID: agentID, SessionID: sessionID}
+	now := time.Now().UnixNano()
+	eps := []Endpoint{}
+	for _, ep := range endpoints {
+		annotations := map[string]string{}
+		for _, a := range ep.Annotations {
+			annotations[a.Name] = a.Value
+		}
+		eps = append(eps, Endpoint{
+			Name:        ep.Name,
+			Type:        ep.Type,
+			Configured:  ep.Configured,
+			Annotations: annotations,
+		})
+	}
+	session := &AgentContext{
+		AgentKey:    key,
+		out:         make(chan serviceRequest),
+		LastUse:     now,
+		ConnectedAt: now,
+		Hostname:    hostname,
+		Version:     version,
+		AgentInfo:   agentInfo,
+		Endpoints:   eps,
 	}
 	return session, key
 }
 
-func (s *server) findAgentSessionContext(ctx context.Context) (*agentContext, error) {
-	s.Lock()
-	defer s.Unlock()
+func (a *AgentSessions) findSession(ctx context.Context) (*AgentContext, error) {
+	a.RLock()
+	defer a.RUnlock()
 	agentID, sessionID := IdentityFromContext(ctx)
-	key := agentKey{agentID: agentID, sessionID: sessionID}
-	if session, found := s.agents[key]; found {
+	key := AgentKey{AgentID: agentID, SessionID: sessionID}
+	if session, found := a.agents[key]; found {
 		return session, nil
 	}
 	return nil, fmt.Errorf("no such agent session connected: %s/%s", agentID, sessionID)
@@ -69,32 +115,32 @@ func loggerFromContext(ctx context.Context, fields ...zap.Field) (context.Contex
 	return ctx, logging.WithContext(ctx).Sugar()
 }
 
-func (s *server) registerAgentSession(agentID string, sessionID string) *agentContext {
-	s.Lock()
-	defer s.Unlock()
-	session, key := newAgentContext(agentID, sessionID)
-	s.agents[key] = session
+func (a *AgentSessions) registerSession(agentID string, sessionID string, hostname string, version string, agentInfo *pb.AgentInfo, endpoints []*pb.EndpointHealth) *AgentContext {
+	a.Lock()
+	defer a.Unlock()
+	session, key := newSessionContext(agentID, sessionID, hostname, version, agentInfo, endpoints)
+	a.agents[key] = session
 	return session
 }
 
-func (s *server) removeAgentSession(session *agentContext) {
-	s.Lock()
-	defer s.Unlock()
-	s.removeAgentSessionUnlocked(session)
+func (a *AgentSessions) removeSession(session *AgentContext) {
+	a.Lock()
+	defer a.Unlock()
+	a.removeSessionUnlocked(session)
 }
 
-func (s *server) removeAgentSessionUnlocked(session *agentContext) {
-	key := agentKey{agentID: session.agentID, sessionID: session.sessionID}
-	delete(s.agents, key)
+func (a *AgentSessions) removeSessionUnlocked(session *AgentContext) {
+	key := AgentKey{AgentID: session.AgentID, SessionID: session.SessionID}
+	delete(a.agents, key)
 }
 
-func (s *server) touchSession(session *agentContext, t int64) {
-	s.Lock()
-	defer s.Unlock()
-	s.agents[session.agentKey].lastUsed = t
+func (a *AgentSessions) touchSession(session *AgentContext, t int64) {
+	a.Lock()
+	defer a.Unlock()
+	a.agents[session.AgentKey].LastUse = t
 }
 
-func (s *server) checkSessionTimeouts(ctx context.Context) {
+func (a *AgentSessions) checkSessionTimeouts(ctx context.Context, idleTimeout int64) {
 	t := time.NewTicker(10 * time.Second)
 
 	for {
@@ -103,20 +149,63 @@ func (s *server) checkSessionTimeouts(ctx context.Context) {
 			return
 		case <-t.C:
 			now := time.Now().UnixNano()
-			s.expireOldSessions(ctx, now)
+			a.expireOldSessions(ctx, now, idleTimeout)
 		}
 	}
 }
 
-func (s *server) expireOldSessions(ctx context.Context, now int64) {
+func (a *AgentSessions) expireOldSessions(ctx context.Context, now int64, idleTimeout int64) {
 	_, logging := loggerFromContext(ctx)
-	s.Lock()
-	defer s.Unlock()
+	a.Lock()
+	defer a.Unlock()
 
-	for key, session := range s.agents {
-		if session.lastUsed+s.agentIdleTimeout < now {
-			logging.Infow("disconnecting idle agent", "lastUsed", session.lastUsed, "now", now, "agentID", key.agentID, "sessionID", key.sessionID)
-			s.removeAgentSessionUnlocked(session)
+	for key, session := range a.agents {
+		if session.LastUse+idleTimeout < now {
+			logging.Infow("disconnecting idle agent", "lastUsed", session.LastUse, "now", now, "agentID", key.AgentID, "sessionID", key.SessionID)
+			a.removeSessionUnlocked(session)
 		}
 	}
+}
+
+func (a *AgentSessions) GetStatistics() interface{} {
+	ret := []interface{}{}
+	a.RLock()
+	defer a.RUnlock()
+	for _, ac := range a.agents {
+		ret = append(ret, ac.GetStatistics())
+	}
+	return ret
+}
+
+type AgentContextStatistics struct {
+	AgentID        string        `json:"agentId,omitempty"`
+	SessionID      string        `json:"session,omitempty"`
+	Name           string        `json:"name,omitempty"`      // depricated
+	Session        string        `json:"sessionId,omitempty"` // depricated
+	ConnectionType string        `json:"connectionType,omitempty"`
+	Endpoints      []Endpoint    `json:"endpoints,omitempty"`
+	Version        string        `json:"version,omitempty"`
+	Hostname       string        `json:"hostname,omitempty"`
+	ConnectedAt    uint64        `json:"connectedAt,omitempty"`
+	LastPing       uint64        `json:"lastPing,omitempty"`
+	LastUse        uint64        `json:"lastUse,omitempty"`
+	AgentInfo      *pb.AgentInfo `json:"agentInfo,omitempty"`
+}
+
+func (ac *AgentContext) GetStatistics() interface{} {
+	ret := &AgentContextStatistics{
+		ConnectedAt: uint64(ac.ConnectedAt),
+		LastPing:    uint64(ac.LastPing),
+		LastUse:     uint64(ac.LastUse),
+		AgentInfo:   ac.AgentInfo,
+	}
+	ret.AgentID = ac.AgentID
+	ret.SessionID = ac.SessionID
+	ret.Name = ac.AgentID      // depricated
+	ret.Session = ac.SessionID // depricated
+	ret.ConnectionType = "direct"
+	ret.Endpoints = ac.Endpoints
+	ret.Version = ac.Version
+	ret.Hostname = ac.Hostname
+	return ret
 }

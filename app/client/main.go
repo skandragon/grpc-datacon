@@ -45,6 +45,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -89,19 +90,15 @@ var session = AgentSession{
 	done:       make(chan struct{}),
 }
 
-func sendHello(ctx context.Context, c pb.TunnelServiceClient, hostname string, version string) (*pb.HelloResponse, error) {
+func sendHello(ctx context.Context, c pb.TunnelServiceClient, info *pb.AgentInfo, endpoints []serviceconfig.ConfiguredEndpoint, hostname string, version string) (*pb.HelloResponse, error) {
 	ctx, cancel := getHeaderContext(ctx, session.rpcTimeout)
 	defer cancel()
 
 	req := &pb.HelloRequest{
-		Hostname: hostname,
-		Version:  version,
-		Annotations: []*pb.Annotation{
-			{
-				Name:  "mode",
-				Value: "test",
-			},
-		},
+		Hostname:  hostname,
+		Version:   version,
+		Endpoints: serviceconfig.EndpointsToPB(endpoints),
+		AgentInfo: info,
 	}
 	return c.Hello(ctx, req)
 }
@@ -265,6 +262,38 @@ func getAuthToken(filename string) (string, error) {
 	return ret, nil
 }
 
+func loadAgentInfo(filename string) (*pb.AgentInfo, error) {
+	type AgentInfoType struct {
+		Annotations map[string]string `yaml:"annotations,omitempty"`
+	}
+
+	type AgentInfoContainer struct {
+		AgentInfo AgentInfoType `yaml:"agentInfo,omitempty"`
+	}
+
+	buf, err := os.ReadFile(filename)
+	if err != nil {
+		return nil, err
+	}
+
+	info := AgentInfoContainer{}
+	err = yaml.Unmarshal(buf, &info)
+	if err != nil {
+		return nil, err
+	}
+
+	annotations := []*pb.Annotation{}
+	for k, v := range info.AgentInfo.Annotations {
+		annotations = append(annotations, &pb.Annotation{Name: k, Value: v})
+	}
+
+	pbinfo := &pb.AgentInfo{
+		Annotations: annotations,
+	}
+
+	return pbinfo, nil
+}
+
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -309,6 +338,11 @@ func main() {
 	}
 	session.authorization = authToken
 
+	agentInfo, err := loadAgentInfo(config.ServicesConfigFile)
+	if err != nil {
+		logger.Fatal(err)
+	}
+
 	namespace, ok := os.LookupEnv("POD_NAMESPACE")
 	if ok {
 		secretsLoader, err = secrets.MakeKubernetesSecretLoader(namespace)
@@ -333,7 +367,7 @@ func main() {
 	defer conn.Close()
 	c := pb.NewTunnelServiceClient(conn)
 
-	hello, err := sendHello(ctx, c, hostname, version.VersionString())
+	hello, err := sendHello(ctx, c, agentInfo, endpoints, hostname, version.VersionString())
 	check(ctx, err)
 	session.sessionID = hello.InstanceId
 	session.agentID = hello.AgentId

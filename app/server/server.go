@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/OpsMx/go-app-base/version"
 	"github.com/skandragon/grpc-datacon/internal/serviceconfig"
 	pb "github.com/skandragon/grpc-datacon/internal/tunnel"
 	"github.com/skandragon/grpc-datacon/internal/ulid"
@@ -39,29 +40,30 @@ type server struct {
 	pb.UnimplementedTunnelServiceServer
 	sync.Mutex
 	agentIdleTimeout int64
-	agents           map[agentKey]*agentContext
 	streams          map[string]serviceconfig.HTTPEcho
 }
 
 func (s *server) Hello(ctx context.Context, in *pb.HelloRequest) (*pb.HelloResponse, error) {
 	agentID, _ := IdentityFromContext(ctx)
 	_, logger := loggerFromContext(ctx)
-	logger.Infow("Hello", "endpoints", in.Endpoints, "annotations", in.Annotations)
-	session := s.registerAgentSession(agentID, ulid.GlobalContext.Ulid())
+	logger.Infow("Hello", "endpoints", in.Endpoints, "agentInfo.annotations", in.AgentInfo.Annotations)
+
+	session := agents.registerSession(agentID, ulid.GlobalContext.Ulid(), in.Hostname, in.Version, in.AgentInfo, in.Endpoints)
 	return &pb.HelloResponse{
-		InstanceId: session.sessionID,
+		InstanceId: session.SessionID,
 		AgentId:    agentID,
+		Version:    version.VersionString(),
 	}, nil
 }
 
 func (s *server) Ping(ctx context.Context, in *pb.PingRequest) (*pb.PingResponse, error) {
 	_, logger := loggerFromContext(ctx)
-	session, err := s.findAgentSessionContext(ctx)
+	session, err := agents.findSession(ctx)
 	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, "Hello must be called first")
 	}
 	now := time.Now().UnixNano()
-	s.touchSession(session, now)
+	agents.touchSession(session, now)
 	logger.Infof("Ping")
 	r := &pb.PingResponse{
 		Ts:       uint64(now),
@@ -78,11 +80,11 @@ type serviceRequest struct {
 func (s *server) WaitForRequest(in *pb.WaitForRequestArgs, stream pb.TunnelService_WaitForRequestServer) error {
 	ctx, logger := loggerFromContext(stream.Context())
 	logger.Infof("WaitForRequest")
-	session, err := s.findAgentSessionContext(stream.Context())
+	session, err := agents.findSession(stream.Context())
 	if err != nil {
 		return status.Error(codes.FailedPrecondition, "Hello must be called first")
 	}
-	defer s.removeAgentSession(session)
+	defer agents.removeSession(session)
 
 	for {
 		select {
@@ -181,19 +183,14 @@ func runAgentGRPCServer(ctx context.Context, useTLS bool, serverCert *tls.Certif
 
 	idleTimeout := 60 * time.Second
 
-	sconfig := &server{
+	s := &server{
 		agentIdleTimeout: idleTimeout.Nanoseconds(),
-		agents:           map[agentKey]*agentContext{},
 		streams:          map[string]serviceconfig.HTTPEcho{},
 	}
 
 	cleanerCtx, cleanerCancel := context.WithCancel(ctx)
 	defer cleanerCancel()
-	go sconfig.checkSessionTimeouts(cleanerCtx)
-
-	requesterCtx, requesterCancel := context.WithCancel(ctx)
-	defer requesterCancel()
-	go sconfig.requestOnTimer(requesterCtx)
+	go agents.checkSessionTimeouts(cleanerCtx, s.agentIdleTimeout)
 
 	certPool, err := authority.MakeCertPool()
 	if err != nil {
@@ -214,7 +211,7 @@ func runAgentGRPCServer(ctx context.Context, useTLS bool, serverCert *tls.Certif
 		grpc.StreamInterceptor(interceptor.Stream()),
 	}
 	grpcServer := grpc.NewServer(opts...)
-	pb.RegisterTunnelServiceServer(grpcServer, sconfig)
+	pb.RegisterTunnelServiceServer(grpcServer, s)
 	if err := grpcServer.Serve(lis); err != nil {
 		logger.Fatalw("grpcServer.Serve() failed", "error", err)
 	}

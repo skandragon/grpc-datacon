@@ -40,8 +40,6 @@ import (
 	"github.com/skandragon/grpc-datacon/internal/jwtutil"
 	"github.com/skandragon/grpc-datacon/internal/secrets"
 	"github.com/skandragon/grpc-datacon/internal/serviceconfig"
-	pb "github.com/skandragon/grpc-datacon/internal/tunnel"
-	"github.com/skandragon/grpc-datacon/internal/ulid"
 	"google.golang.org/grpc/keepalive"
 )
 
@@ -68,6 +66,7 @@ var (
 	secretsLoader     secrets.SecretLoader
 	authority         *ca.CA
 	endpoints         []serviceconfig.ConfiguredEndpoint
+	agents            = makeAgentSessions()
 )
 
 var kaep = keepalive.EnforcementPolicy{
@@ -79,48 +78,6 @@ var kasp = keepalive.ServerParameters{
 	MaxConnectionIdle: 20 * time.Minute,
 	Time:              10 * time.Second,
 	Timeout:           10 * time.Second,
-}
-
-// get a random session
-func (s *server) getRandomSession() *agentContext {
-	s.Lock()
-	defer s.Unlock()
-	for _, session := range s.agents {
-		return session
-	}
-	return nil
-}
-
-// fake a http request to some random agent
-func (s *server) randomRequest(ctx context.Context) {
-	session := s.getRandomSession()
-	if session == nil {
-		return
-	}
-	streamID := ulid.GlobalContext.Ulid()
-	session.out <- serviceRequest{
-		req: &pb.TunnelRequest{
-			StreamId: streamID,
-			Name:     "whoami",
-			Type:     "whoami",
-			Method:   "GET",
-			URI:      "/",
-		},
-		echo: MakeEcho(ctx, streamID),
-	}
-}
-
-func (s *server) requestOnTimer(ctx context.Context) {
-	t := time.NewTicker(10 * time.Second)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			s.randomRequest(ctx)
-		}
-	}
 }
 
 func healthcheck(w http.ResponseWriter, r *http.Request) {
@@ -343,7 +300,7 @@ func main() {
 
 	endpoints = serviceconfig.ConfigureEndpoints(ctx, secretsLoader, &config.ServiceConfig)
 
-	cnc := cncserver.MakeCNCServer(config, authority, cncserver.FakeStats(), version.GitBranch(), nil)
+	cnc := cncserver.MakeCNCServer(config, authority, agents, version.GitBranch(), nil)
 	go cnc.RunServer(*serverCert)
 
 	go runAgentGRPCServer(ctx, config.AgentUseTLS, serverCert)
