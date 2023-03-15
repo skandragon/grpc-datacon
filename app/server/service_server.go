@@ -24,21 +24,11 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/skandragon/grpc-datacon/internal/ca"
 	"github.com/skandragon/grpc-datacon/internal/jwtutil"
 	"github.com/skandragon/grpc-datacon/internal/serviceconfig"
 	pb "github.com/skandragon/grpc-datacon/internal/tunnel"
 	"github.com/skandragon/grpc-datacon/internal/ulid"
-)
-
-var (
-	// metrics
-	apiRequestCounter = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "api_requests_total",
-		Help: "The total number of API requests",
-	}, []string{"route", "service"})
 )
 
 // RunHTTPSServer will listen for incoming service requests on a provided port, and
@@ -190,17 +180,6 @@ func secureAPIHandlerMaker(routes *AgentSessions, service serviceconfig.Incoming
 	}
 }
 
-func copyHeaders(resp *pb.TunnelHeaders, w http.ResponseWriter) {
-	for name := range w.Header() {
-		w.Header().Del(name)
-	}
-	for _, header := range resp.Headers {
-		for _, value := range header.Values {
-			w.Header().Add(header.Name, value)
-		}
-	}
-}
-
 func runAPIHandler(routes *AgentSessions, ep SessionSearch, w http.ResponseWriter, r *http.Request) {
 	ctx, logger := loggerFromContext(r.Context())
 
@@ -264,7 +243,17 @@ func runEcho(ctx context.Context, echo *ServerEcho, w http.ResponseWriter, r *ht
 			}
 			return
 		case data := <-echo.dataChan:
-			w.Write(data)
+			n, err := w.Write(data)
+			if err != nil {
+				// TODO: send cancel over gRPC
+				logger.Warnf("send to client: %v", err)
+				return
+			}
+			if n != len(data) {
+				// TODO: send cancel over gRPC
+				logger.Warnf("short send to client: wrote %d, wanted to write %d bytes", n, len(data))
+				return
+			}
 			flusher.Flush()
 		case headers := <-echo.headersChan:
 			for name := range w.Header() {

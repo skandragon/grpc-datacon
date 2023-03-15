@@ -27,8 +27,12 @@ import (
 // not be used in production...
 func LoadTestKeys(t *testing.T) jwk.Set {
 	keyset := jwk.NewSet()
-	keyset.AddKey(makekey(t, "key1", "this is a key"))
-	keyset.AddKey(makekey(t, "key2", "this is a key2"))
+	if err := keyset.AddKey(makekey(t, "key1", "this is a key")); err != nil {
+		panic(err)
+	}
+	if err := keyset.AddKey(makekey(t, "key2", "this is a key2")); err != nil {
+		panic(err)
+	}
 	return keyset
 }
 
@@ -38,12 +42,10 @@ func makekey(t *testing.T, name string, content string) jwk.Key {
 		t.Error(err)
 		t.FailNow()
 	}
-	err = key.Set(jwk.KeyIDKey, name)
-	if err != nil {
+	if err := key.Set(jwk.KeyIDKey, name); err != nil {
 		panic(err)
 	}
-	err = key.Set(jwk.AlgorithmKey, jwa.HS256)
-	if err != nil {
+	if err := key.Set(jwk.AlgorithmKey, jwa.HS256); err != nil {
 		panic(err)
 	}
 	return key

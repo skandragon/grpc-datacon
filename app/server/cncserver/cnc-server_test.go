@@ -434,16 +434,16 @@ func makeTestKeyset(keyid string) jwk.Set {
 	if err != nil {
 		panic(err)
 	}
-	err = key.Set(jwk.KeyIDKey, keyid)
-	if err != nil {
+	if err := key.Set(jwk.KeyIDKey, keyid); err != nil {
 		panic(err)
 	}
-	err = key.Set(jwk.AlgorithmKey, jwa.HS256)
-	if err != nil {
+	if err := key.Set(jwk.AlgorithmKey, jwa.HS256); err != nil {
 		panic(err)
 	}
 	keyset := jwk.NewSet()
-	keyset.AddKey(key)
+	if err := keyset.AddKey(key); err != nil {
+		panic(err)
+	}
 	return keyset
 }
 

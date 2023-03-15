@@ -142,10 +142,16 @@ func waitForRequest(ctx context.Context, c pb.TunnelServiceClient) error {
 		echo := MakeEcho(ctx, c, req.StreamId)
 		ep, found := findEndpoint(ctx, req.Name, req.Type)
 		if !found {
-			echo.Fail(ctx, http.StatusBadGateway, fmt.Errorf("no such service on agent"))
+			if err := echo.Fail(ctx, http.StatusBadGateway, fmt.Errorf("no such service on agent")); err != nil {
+				logger.Warn(err)
+			}
 			continue
 		}
-		go ep.Instance.ExecuteHTTPRequest(ctx, session.agentID, echo, req)
+		go func() {
+			if err := ep.Instance.ExecuteHTTPRequest(ctx, session.agentID, echo, req); err != nil {
+				logger.Warn(err)
+			}
+		}()
 	}
 }
 

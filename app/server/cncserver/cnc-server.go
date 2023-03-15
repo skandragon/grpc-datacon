@@ -182,8 +182,6 @@ func (s *CNCServer) generateAgentManifestComponents() http.HandlerFunc {
 			return
 		}
 
-		s.authority.GetCACert()
-
 		jwt, err := jwtutil.MakeAgentJWT(req.AgentName, s.clock)
 		if err != nil {
 			logger.Errorf("MakeAgentJWT failed: %v", err)

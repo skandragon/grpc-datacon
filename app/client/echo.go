@@ -54,7 +54,14 @@ func MakeEcho(ctx context.Context, c pb.TunnelServiceClient, streamID string) se
 func (e *AgentEcho) RunDataSender(ctx context.Context) {
 	ctx, logger := loggerFromContext(ctx)
 	stream, err := e.c.SendData(ctx)
-	defer stream.CloseSend()
+
+	defer func() {
+		err := stream.CloseSend()
+		if err != nil {
+			logger.Warn(err)
+		}
+	}()
+
 	if err != nil {
 		logger.Errorf("e.c.SendData(): %v", err)
 	}
@@ -108,8 +115,7 @@ func (e *AgentEcho) Fail(ctx context.Context, code int, err error) error {
 			StreamId: e.streamID,
 			Status:   int32(code),
 		}
-		_, err = e.c.SendHeaders(ctx, h)
-		if err != nil {
+		if _, err := e.c.SendHeaders(ctx, h); err != nil {
 			logger.Errorf("SendHeaders failed (ignoring): %v", err)
 		}
 	}

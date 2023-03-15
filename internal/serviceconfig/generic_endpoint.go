@@ -309,7 +309,9 @@ func RunHTTPRequest(ctx context.Context, client *http.Client, req *pb.TunnelRequ
 			"method", req.Method,
 			"uri", baseURL+req.URI,
 			"error", err)
-		echo.Fail(ctx, http.StatusBadGateway, err)
+		if err2 := echo.Fail(ctx, http.StatusBadGateway, err); err2 != nil {
+			logger.Warn(err2)
+		}
 		return
 	}
 
@@ -320,12 +322,16 @@ func RunHTTPRequest(ctx context.Context, client *http.Client, req *pb.TunnelRequ
 	if err != nil {
 		err = fmt.Errorf("Failed to unmutate headers: %v", err)
 		logger.Warn(err)
-		echo.Fail(ctx, http.StatusBadGateway, err)
+		if err2 := echo.Fail(ctx, http.StatusBadGateway, err); err2 != nil {
+			logger.Warn(err2)
+		}
 		return
 	}
 	if err := echo.Headers(ctx, response); err != nil {
 		logger.Warn(err)
-		echo.Fail(ctx, http.StatusServiceUnavailable, err)
+		if err2 := echo.Fail(ctx, http.StatusServiceUnavailable, err); err2 != nil {
+			logger.Warn(err2)
+		}
 		return
 	}
 
@@ -338,20 +344,28 @@ func RunHTTPRequest(ctx context.Context, client *http.Client, req *pb.TunnelRequ
 		buf := make([]byte, 10240)
 		n, err := httpResponse.Body.Read(buf)
 		if n > 0 {
-			echo.Data(ctx, buf[:n])
+			if err2 := echo.Data(ctx, buf[:n]); err2 != nil {
+				logger.Warn(err)
+			}
 		}
 		if err == io.EOF {
-			echo.Done(ctx)
+			if err2 := echo.Done(ctx); err2 != nil {
+				logger.Warn(err2)
+			}
 			return
 		}
 		if err == context.Canceled {
-			echo.Fail(ctx, http.StatusBadGateway, nil)
+			if err2 := echo.Fail(ctx, http.StatusBadGateway, nil); err2 != nil {
+				logger.Warn(err2)
+			}
 			return
 		}
 		if err != nil {
 			err = fmt.Errorf("Got error on HTTP read: %v", err)
 			logger.Warn(err)
-			echo.Fail(ctx, http.StatusBadGateway, err)
+			if err2 := echo.Fail(ctx, http.StatusBadGateway, err); err2 != nil {
+				logger.Warn(err2)
+			}
 			return
 		}
 	}

@@ -38,7 +38,6 @@ import (
 	"github.com/skandragon/grpc-datacon/app/server/cncserver"
 	"github.com/skandragon/grpc-datacon/internal/ca"
 	"github.com/skandragon/grpc-datacon/internal/jwtutil"
-	"github.com/skandragon/grpc-datacon/internal/secrets"
 	"github.com/skandragon/grpc-datacon/internal/serviceconfig"
 	"google.golang.org/grpc/keepalive"
 )
@@ -63,10 +62,10 @@ var (
 	currentServiceKey string
 	currentAgentKey   string
 	config            *ControllerConfig
-	secretsLoader     secrets.SecretLoader
-	authority         *ca.CA
-	endpoints         []serviceconfig.ConfiguredEndpoint
-	agents            = makeAgentSessions()
+	//secretsLoader     secrets.SecretLoader
+	authority *ca.CA
+	//endpoints         []serviceconfig.ConfiguredEndpoint
+	agents = makeAgentSessions()
 )
 
 var kaep = keepalive.EnforcementPolicy{
@@ -133,15 +132,15 @@ func loadServiceAuthKeyset(ctx context.Context) {
 		if err != nil {
 			return err
 		}
-		err = key.Set(jwk.KeyIDKey, info.Name())
-		if err != nil {
+		if err := key.Set(jwk.KeyIDKey, info.Name()); err != nil {
 			return err
 		}
-		err = key.Set(jwk.AlgorithmKey, jwa.HS256)
-		if err != nil {
+		if err := key.Set(jwk.AlgorithmKey, jwa.HS256); err != nil {
 			return err
 		}
-		serviceKeyset.AddKey(key)
+		if err := serviceKeyset.AddKey(key); err != nil {
+			return err
+		}
 		logger.Infof("Loaded service key name %s, length %d", info.Name(), len(content))
 		return nil
 	})
@@ -186,15 +185,15 @@ func loadAgentAuthKeyset(ctx context.Context) {
 		if err != nil {
 			return err
 		}
-		err = key.Set(jwk.KeyIDKey, info.Name())
-		if err != nil {
+		if err := key.Set(jwk.KeyIDKey, info.Name()); err != nil {
 			return err
 		}
-		err = key.Set(jwk.AlgorithmKey, jwa.HS256)
-		if err != nil {
+		if err := key.Set(jwk.AlgorithmKey, jwa.HS256); err != nil {
 			return err
 		}
-		agentKeyset.AddKey(key)
+		if err := agentKeyset.AddKey(key); err != nil {
+			return err
+		}
 		logger.Infof("Loaded agent key name %s, length %d", info.Name(), len(content))
 		return nil
 	})
@@ -213,20 +212,20 @@ func loadAgentAuthKeyset(ctx context.Context) {
 	logger.Infof("Loaded %d agentAuth keys", agentKeyset.Len())
 }
 
-func getSecretsLoader(ctx context.Context) *secrets.KubernetesSecretLoader {
-	_, logger := loggerFromContext(ctx)
-	namespace, ok := os.LookupEnv("POD_NAMESPACE")
-	if !ok {
-		logger.Infof("POD_NAMESPACE not set.  Disabling Kubeernetes secret handling.")
-		return nil
-	}
-	if secretsLoader, err := secrets.MakeKubernetesSecretLoader(namespace); err == nil {
-		return secretsLoader
-	} else {
-		logger.Fatal(err)
-	}
-	return nil
-}
+//func getSecretsLoader(ctx context.Context) *secrets.KubernetesSecretLoader {
+//	_, logger := loggerFromContext(ctx)
+//	namespace, ok := os.LookupEnv("POD_NAMESPACE")
+//	if !ok {
+//		logger.Infof("POD_NAMESPACE not set.  Disabling Kubeernetes secret handling.")
+//		return nil
+//	}
+//	if secretsLoader, err := secrets.MakeKubernetesSecretLoader(namespace); err == nil {
+//		return secretsLoader
+//	} else {
+//		logger.Fatal(err)
+//	}
+//	return nil
+//}
 
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -264,7 +263,7 @@ func main() {
 	}
 	config.Dump()
 
-	secretsLoader = getSecretsLoader(ctx)
+	//secretsLoader = getSecretsLoader(ctx)
 	loadServiceAuthKeyset(ctx)
 	loadAgentAuthKeyset(ctx)
 
@@ -298,8 +297,6 @@ func main() {
 		logger.Fatalf("Cannot make server certificate: %v", err)
 	}
 
-	endpoints = serviceconfig.ConfigureEndpoints(ctx, secretsLoader, &config.ServiceConfig)
-
 	cnc := cncserver.MakeCNCServer(config, authority, agents, version.GitBranch(), nil)
 	go cnc.RunServer(*serverCert)
 
@@ -311,22 +308,16 @@ func main() {
 		Port: config.ServiceListenPort,
 	})
 
-	go RunHTTPServer(ctx, agents, serviceconfig.IncomingServiceConfig{
-		Name:               "whoami",
-		Port:               config.ServiceListenPort + 1000,
-		ServiceType:        "whoami",
-		Destination:        "smith",
-		DestinationService: "whoami",
-	})
+	//endpoints = serviceconfig.ConfigureEndpoints(ctx, secretsLoader, &config.ServiceConfig)
 
 	// Now, add all the others defined by our config.
-	//	for _, service := range config.ServiceConfig.IncomingServices {
-	//		if service.UseHTTP {
-	//			go serviceconfig.RunHTTPServer(routes, service)
-	//		} else {
-	//			go serviceconfig.RunHTTPSServer(routes, authority, *serverCert, service)
-	//		}
-	//	}
+	for _, service := range config.ServiceConfig.IncomingServices {
+		if service.UseHTTP {
+			go RunHTTPServer(ctx, agents, service)
+		} else {
+			go RunHTTPSServer(ctx, agents, authority, *serverCert, service)
+		}
+	}
 
 	go runPrometheusHTTPServer(ctx, config.PrometheusListenPort)
 
