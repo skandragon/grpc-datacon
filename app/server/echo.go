@@ -21,13 +21,16 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/skandragon/grpc-datacon/internal/serviceconfig"
 	pb "github.com/skandragon/grpc-datacon/internal/tunnel"
 )
 
 type ServerEcho struct {
-	streamID string
-	state    echoState
+	streamID    string
+	state       echoState
+	headersChan chan *pb.TunnelHeaders
+	dataChan    chan []byte
+	doneChan    chan bool
+	failChan    chan int
 }
 
 type echoState int
@@ -38,43 +41,55 @@ const (
 	stateDone
 )
 
-func MakeEcho(ctx context.Context, streamID string) serviceconfig.HTTPEcho {
+func MakeIncomingEchoer(ctx context.Context, streamID string) *ServerEcho {
 	e := &ServerEcho{
-		streamID: streamID,
-		state:    stateHeaders,
+		streamID:    streamID,
+		state:       stateHeaders,
+		headersChan: make(chan *pb.TunnelHeaders),
+		dataChan:    make(chan []byte),
+		doneChan:    make(chan bool),
+		failChan:    make(chan int),
 	}
 	return e
 }
 
 func (e *ServerEcho) Headers(ctx context.Context, h *pb.TunnelHeaders) error {
-	log.Printf("echo.Headers(%s): %v", e.streamID, h)
 	if e.state != stateHeaders {
 		return fmt.Errorf("programmer error: Headers called when not in correct state (in %d)", e.state)
 	}
 	e.state = stateData
+	e.headersChan <- h
 	return nil
 }
 
 func (e *ServerEcho) Data(ctx context.Context, data []byte) error {
-	log.Printf("echo.Data(%s): %s", e.streamID, string(data))
 	if e.state != stateData {
 		return fmt.Errorf("programmer error: Data called when not in correct state (in %d)", e.state)
 	}
+	e.dataChan <- data
 	return nil
+}
+
+func (e *ServerEcho) closeChannels() {
+	close(e.dataChan)
+	close(e.doneChan)
+	close(e.headersChan)
+	close(e.failChan)
 }
 
 func (e *ServerEcho) Fail(ctx context.Context, code int, err error) error {
 	log.Printf("echo.Fail(%s): code %d, err %v", e.streamID, code, err)
-	//defer close(e.dchan)
+	defer e.closeChannels()
 	e.state = stateDone
+	e.failChan <- code
 	return nil
 }
 
 func (e *ServerEcho) Done(ctx context.Context) error {
-	log.Printf("echo.Done(%s)", e.streamID)
-	//defer close(e.dchan)
+	defer e.closeChannels()
 	if e.state != stateData {
 		return fmt.Errorf("programmer error: Done called when not in correct state (in %d)", e.state)
 	}
+	e.doneChan <- true
 	return nil
 }

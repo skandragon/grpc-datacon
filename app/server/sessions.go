@@ -92,6 +92,27 @@ func newSessionContext(agentID string, sessionID string, hostname string, versio
 	return session, key
 }
 
+type SessionSearch struct {
+	AgentID     string
+	ServiceName string
+	ServiceType string
+}
+
+func (a *AgentSessions) find(ctx context.Context, target SessionSearch) *AgentContext {
+	a.RLock()
+	defer a.RUnlock()
+	for _, agent := range a.agents {
+		if agent.AgentID == target.AgentID {
+			for _, ep := range agent.Endpoints {
+				if ep.Configured && ep.Name == target.ServiceName && ep.Type == target.ServiceType {
+					return agent
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func (a *AgentSessions) findSession(ctx context.Context) (*AgentContext, error) {
 	a.RLock()
 	defer a.RUnlock()
