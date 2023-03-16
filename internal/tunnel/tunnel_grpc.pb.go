@@ -41,6 +41,7 @@ const (
 	TunnelService_SendData_FullMethodName       = "/tunnel.TunnelService/SendData"
 	TunnelService_SendHeaders_FullMethodName    = "/tunnel.TunnelService/SendHeaders"
 	TunnelService_ReceiveData_FullMethodName    = "/tunnel.TunnelService/ReceiveData"
+	TunnelService_CancelStream_FullMethodName   = "/tunnel.TunnelService/CancelStream"
 )
 
 // TunnelServiceClient is the client API for TunnelService service.
@@ -68,6 +69,7 @@ type TunnelServiceClient interface {
 	SendData(ctx context.Context, opts ...grpc.CallOption) (TunnelService_SendDataClient, error)
 	SendHeaders(ctx context.Context, in *TunnelHeaders, opts ...grpc.CallOption) (*SendHeadersResponse, error)
 	ReceiveData(ctx context.Context, in *ReceiveDataRequest, opts ...grpc.CallOption) (TunnelService_ReceiveDataClient, error)
+	CancelStream(ctx context.Context, in *CancelStreamRequest, opts ...grpc.CallOption) (*CancelStreamResponse, error)
 }
 
 type tunnelServiceClient struct {
@@ -212,6 +214,15 @@ func (x *tunnelServiceReceiveDataClient) Recv() (*Data, error) {
 	return m, nil
 }
 
+func (c *tunnelServiceClient) CancelStream(ctx context.Context, in *CancelStreamRequest, opts ...grpc.CallOption) (*CancelStreamResponse, error) {
+	out := new(CancelStreamResponse)
+	err := c.cc.Invoke(ctx, TunnelService_CancelStream_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // TunnelServiceServer is the server API for TunnelService service.
 // All implementations must embed UnimplementedTunnelServiceServer
 // for forward compatibility
@@ -237,6 +248,7 @@ type TunnelServiceServer interface {
 	SendData(TunnelService_SendDataServer) error
 	SendHeaders(context.Context, *TunnelHeaders) (*SendHeadersResponse, error)
 	ReceiveData(*ReceiveDataRequest, TunnelService_ReceiveDataServer) error
+	CancelStream(context.Context, *CancelStreamRequest) (*CancelStreamResponse, error)
 	mustEmbedUnimplementedTunnelServiceServer()
 }
 
@@ -264,6 +276,9 @@ func (UnimplementedTunnelServiceServer) SendHeaders(context.Context, *TunnelHead
 }
 func (UnimplementedTunnelServiceServer) ReceiveData(*ReceiveDataRequest, TunnelService_ReceiveDataServer) error {
 	return status.Errorf(codes.Unimplemented, "method ReceiveData not implemented")
+}
+func (UnimplementedTunnelServiceServer) CancelStream(context.Context, *CancelStreamRequest) (*CancelStreamResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CancelStream not implemented")
 }
 func (UnimplementedTunnelServiceServer) mustEmbedUnimplementedTunnelServiceServer() {}
 
@@ -418,6 +433,24 @@ func (x *tunnelServiceReceiveDataServer) Send(m *Data) error {
 	return x.ServerStream.SendMsg(m)
 }
 
+func _TunnelService_CancelStream_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CancelStreamRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TunnelServiceServer).CancelStream(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TunnelService_CancelStream_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TunnelServiceServer).CancelStream(ctx, req.(*CancelStreamRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // TunnelService_ServiceDesc is the grpc.ServiceDesc for TunnelService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -440,6 +473,10 @@ var TunnelService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SendHeaders",
 			Handler:    _TunnelService_SendHeaders_Handler,
+		},
+		{
+			MethodName: "CancelStream",
+			Handler:    _TunnelService_CancelStream_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

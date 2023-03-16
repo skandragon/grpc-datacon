@@ -34,13 +34,14 @@ const (
 // configuration file is loaded from disk first, and then any
 // environment variables are applied.
 type agentConfig struct {
-	ControllerHostname string `json:"controllerHostname,omitempty" yaml:"controllerHostname,omitempty"`
-	CACertFile         string `json:"caCertFile,omitempty" yaml:"caCertFile,omitempty"`
-	CACert64           string `json:"caCert64,omitempty" yaml:"caCert64,omitempty"`
-	AuthTokenFile      string `json:"authTokenFile,omitempty" yaml:"authTokenFile,omitempty"`
-	ServicesConfigFile string `json:"servicesConfigFile,omitempty" yaml:"servicesConfigFile,omitempty"`
-	DialMaxRetries     int    `json:"dialMaxRetries,omitempty" yaml:"dialMaxRetries,omitempty"`
-	DialRetryTime      int    `json:"dialRetryTime,omitempty" yaml:"dialRetryTime,omitempty"`
+	ControllerHostname   string `json:"controllerHostname,omitempty" yaml:"controllerHostname,omitempty"`
+	CACertFile           string `json:"caCertFile,omitempty" yaml:"caCertFile,omitempty"`
+	CACert64             string `json:"caCert64,omitempty" yaml:"caCert64,omitempty"`
+	AuthTokenFile        string `json:"authTokenFile,omitempty" yaml:"authTokenFile,omitempty"`
+	ServicesConfigFile   string `json:"servicesConfigFile,omitempty" yaml:"servicesConfigFile,omitempty"`
+	DialMaxRetries       int    `json:"dialMaxRetries,omitempty" yaml:"dialMaxRetries,omitempty"`
+	DialRetryTime        int    `json:"dialRetryTime,omitempty" yaml:"dialRetryTime,omitempty"`
+	PrometheusListenPort uint16 `json:"prometheusListenPort,omitempty" yaml:"prometheusListenPort,omitempty"`
 }
 
 func (c *agentConfig) applyDefaults() {
@@ -66,6 +67,10 @@ func (c *agentConfig) applyDefaults() {
 
 	if c.DialRetryTime == 0 {
 		c.DialRetryTime = defaultDialRetryTime
+	}
+
+	if c.PrometheusListenPort == 0 {
+		c.PrometheusListenPort = 9102
 	}
 }
 

@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	pprofhttp "net/http/pprof"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -54,6 +55,7 @@ var (
 	traceToStdout  = flag.Bool("traceToStdout", false, "log traces to stdout")
 	traceRatio     = flag.Float64("traceRatio", 0.01, "ratio of traces to create, if incoming request is not traced")
 	showversion    = flag.Bool("version", false, "show the version and exit")
+	profile        = flag.Bool("profile", false, "enable memory and CPU profiling")
 
 	tracerProvider *tracer.TracerProvider
 
@@ -93,7 +95,7 @@ func healthcheck(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func runPrometheusHTTPServer(ctx context.Context, port uint16) {
+func runPrometheusHTTPServer(ctx context.Context, port uint16, profile bool) {
 	_, logger := loggerFromContext(ctx)
 	logger.Infof("Running HTTP listener for Prometheus on port %d", port)
 
@@ -101,6 +103,14 @@ func runPrometheusHTTPServer(ctx context.Context, port uint16) {
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/", healthcheck)
 	mux.HandleFunc("/health", healthcheck)
+	if profile {
+		logger.Infof("Prometheus handler includes /debug/pprof endpoints")
+		mux.HandleFunc("/debug/pprof/", pprofhttp.Index)
+		mux.HandleFunc("/debug/pprof/cmdline", pprofhttp.Cmdline)
+		mux.HandleFunc("/debug/pprof/profile", pprofhttp.Profile)
+		mux.HandleFunc("/debug/pprof/symbol", pprofhttp.Symbol)
+		mux.HandleFunc("/debug/pprof/trace", pprofhttp.Trace)
+	}
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),
@@ -319,7 +329,7 @@ func main() {
 		}
 	}
 
-	go runPrometheusHTTPServer(ctx, config.PrometheusListenPort)
+	go runPrometheusHTTPServer(ctx, config.PrometheusListenPort, *profile)
 
 	agentJWT, err := jwtutil.MakeAgentJWT("smith", nil)
 	if err != nil {

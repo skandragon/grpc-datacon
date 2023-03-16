@@ -27,6 +27,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	pprofhttp "net/http/pprof"
 	"os"
 	"runtime"
 	"strings"
@@ -35,6 +36,7 @@ import (
 	"github.com/OpsMx/go-app-base/tracer"
 	"github.com/OpsMx/go-app-base/util"
 	"github.com/OpsMx/go-app-base/version"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/skandragon/grpc-datacon/internal/ca"
 	"github.com/skandragon/grpc-datacon/internal/logging"
 	"github.com/skandragon/grpc-datacon/internal/secrets"
@@ -61,6 +63,7 @@ var (
 	traceToStdout  = flag.Bool("traceToStdout", false, "log traces to stdout")
 	traceRatio     = flag.Float64("traceRatio", 0.01, "ratio of traces to create, if incoming request is not traced")
 	showversion    = flag.Bool("version", false, "show the version and exit")
+	profile        = flag.Bool("profile", false, "enable memory and CPU profiling")
 
 	hostname = getHostname()
 
@@ -130,7 +133,7 @@ func waitForRequest(ctx context.Context, c pb.TunnelServiceClient) error {
 		if err != nil {
 			return err
 		}
-		logger.Infow("waitForRequest response",
+		logger.Debugw("waitForRequest response",
 			"streamID", req.StreamId,
 			"method", req.Method,
 			"serviceName", req.Name,
@@ -139,7 +142,8 @@ func waitForRequest(ctx context.Context, c pb.TunnelServiceClient) error {
 			"bodyLength", len(req.Body))
 
 		// TODO: implement endpoint search and dispatch request
-		echo := MakeEcho(ctx, c, req.StreamId)
+		doneChan := make(chan bool)
+		echo := MakeEcho(ctx, c, req.StreamId, doneChan)
 		ep, found := findEndpoint(ctx, req.Name, req.Type)
 		if !found {
 			if err := echo.Fail(ctx, http.StatusBadGateway, fmt.Errorf("no such service on agent")); err != nil {
@@ -147,6 +151,12 @@ func waitForRequest(ctx context.Context, c pb.TunnelServiceClient) error {
 			}
 			continue
 		}
+
+		go func() {
+			<-doneChan
+			cancel()
+		}()
+
 		go func() {
 			if err := ep.Instance.ExecuteHTTPRequest(ctx, session.agentID, echo, req); err != nil {
 				logger.Warn(err)
@@ -300,6 +310,34 @@ func loadAgentInfo(filename string) (*pb.AgentInfo, error) {
 	return pbinfo, nil
 }
 
+func healthcheck(w http.ResponseWriter, r *http.Request) {
+	return
+}
+
+func runPrometheusHTTPServer(ctx context.Context, port uint16, profile bool) {
+	_, logger := loggerFromContext(ctx)
+	logger.Infof("Running HTTP listener for Prometheus on port %d", port)
+
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+	mux.HandleFunc("/", healthcheck)
+	mux.HandleFunc("/health", healthcheck)
+	if profile {
+		logger.Infof("Prometheus handler includes /debug/pprof endpoints")
+		mux.HandleFunc("/debug/pprof/", pprofhttp.Index)
+		mux.HandleFunc("/debug/pprof/cmdline", pprofhttp.Cmdline)
+		mux.HandleFunc("/debug/pprof/profile", pprofhttp.Profile)
+		mux.HandleFunc("/debug/pprof/symbol", pprofhttp.Symbol)
+		mux.HandleFunc("/debug/pprof/trace", pprofhttp.Trace)
+	}
+
+	server := &http.Server{
+		Addr:    fmt.Sprintf(":%d", port),
+		Handler: mux,
+	}
+	logger.Fatal(server.ListenAndServe())
+}
+
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -389,6 +427,8 @@ func main() {
 		log.Printf("pinger failed: %v", err)
 		session.done <- struct{}{}
 	}()
+
+	go runPrometheusHTTPServer(ctx, config.PrometheusListenPort, *profile)
 
 	<-session.done
 }

@@ -19,7 +19,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 
 	pb "github.com/skandragon/grpc-datacon/internal/tunnel"
 )
@@ -39,6 +38,7 @@ const (
 	stateHeaders echoState = iota
 	stateData
 	stateDone
+	stateCanceled
 )
 
 func MakeIncomingEchoer(ctx context.Context, streamID string) *ServerEcho {
@@ -70,26 +70,22 @@ func (e *ServerEcho) Data(ctx context.Context, data []byte) error {
 	return nil
 }
 
-func (e *ServerEcho) closeChannels() {
-	close(e.dataChan)
-	close(e.doneChan)
-	close(e.headersChan)
-	close(e.failChan)
-}
-
 func (e *ServerEcho) Fail(ctx context.Context, code int, err error) error {
-	log.Printf("echo.Fail(%s): code %d, err %v", e.streamID, code, err)
-	defer e.closeChannels()
 	e.state = stateDone
 	e.failChan <- code
 	return nil
 }
 
 func (e *ServerEcho) Done(ctx context.Context) error {
-	defer e.closeChannels()
 	if e.state != stateData {
 		return fmt.Errorf("programmer error: Done called when not in correct state (in %d)", e.state)
 	}
 	e.doneChan <- true
+	return nil
+}
+
+func (e *ServerEcho) Cancel(ctx context.Context) error {
+	e.doneChan <- true
+	e.state = stateCanceled
 	return nil
 }

@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"sync"
@@ -40,15 +41,21 @@ type server struct {
 	pb.UnimplementedTunnelServiceServer
 	sync.Mutex
 	agentIdleTimeout int64
-	streams          map[string]serviceconfig.HTTPEcho
+	streamManager    *StreamManager
+}
+
+type serviceRequest struct {
+	req       *pb.TunnelRequest
+	echo      serviceconfig.HTTPEcho
+	closechan chan bool
 }
 
 func (s *server) Hello(ctx context.Context, in *pb.HelloRequest) (*pb.HelloResponse, error) {
 	agentID, _ := IdentityFromContext(ctx)
 	_, logger := loggerFromContext(ctx)
-	logger.Infow("Hello", "endpoints", in.Endpoints, "agentInfo.annotations", in.AgentInfo.Annotations)
-
-	session := agents.registerSession(agentID, ulid.GlobalContext.Ulid(), in.Hostname, in.Version, in.AgentInfo, in.Endpoints)
+	sessionID := ulid.GlobalContext.Ulid()
+	logger.Infow("Hello", "endpoints", in.Endpoints, "agentInfo.annotations", in.AgentInfo.Annotations, "sessionID", sessionID)
+	session := agents.registerSession(agentID, sessionID, in.Hostname, in.Version, in.AgentInfo, in.Endpoints)
 	return &pb.HelloResponse{
 		InstanceId: session.SessionID,
 		AgentId:    agentID,
@@ -57,14 +64,12 @@ func (s *server) Hello(ctx context.Context, in *pb.HelloRequest) (*pb.HelloRespo
 }
 
 func (s *server) Ping(ctx context.Context, in *pb.PingRequest) (*pb.PingResponse, error) {
-	_, logger := loggerFromContext(ctx)
 	session, err := agents.findSession(ctx)
 	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, "Hello must be called first")
 	}
 	now := time.Now().UnixNano()
 	agents.touchSession(session, now)
-	logger.Infof("Ping")
 	r := &pb.PingResponse{
 		Ts:       uint64(now),
 		EchoedTs: in.Ts,
@@ -72,14 +77,13 @@ func (s *server) Ping(ctx context.Context, in *pb.PingRequest) (*pb.PingResponse
 	return r, nil
 }
 
-type serviceRequest struct {
-	req  *pb.TunnelRequest
-	echo serviceconfig.HTTPEcho
+func (s *server) closeAgentSession(ctx context.Context, session *AgentContext) {
+	agents.removeSession(session)
+	s.streamManager.FlushAgent(ctx, session)
 }
 
 func (s *server) WaitForRequest(in *pb.WaitForRequestArgs, stream pb.TunnelService_WaitForRequestServer) error {
 	ctx, logger := loggerFromContext(stream.Context())
-	logger.Infof("WaitForRequest")
 	session, err := agents.findSession(stream.Context())
 	if err != nil {
 		return status.Error(codes.FailedPrecondition, "Hello must be called first")
@@ -90,17 +94,12 @@ func (s *server) WaitForRequest(in *pb.WaitForRequestArgs, stream pb.TunnelServi
 		select {
 		case <-ctx.Done():
 			logger.Infow("closed connection")
+			s.closeAgentSession(ctx, session)
 			return status.Error(codes.Canceled, "client closed connection")
 		case sr := <-session.out:
-			logger.Infow("->TunnelRequest",
-				"streamID", sr.req.StreamId,
-				"method", sr.req.Method,
-				"serviceName", sr.req.Name,
-				"serviceType", sr.req.Type,
-				"uri", sr.req.URI,
-				"bodyLength", len(sr.req.Body))
-			s.registerStream(ctx, sr.req.StreamId, sr.echo)
+			s.streamManager.Register(ctx, session.AgentID, sr.req.StreamId, sr.closechan, sr.echo)
 			if err := stream.Send(sr.req); err != nil {
+				s.closeAgentSession(ctx, session)
 				logger.Errorw("WaitForRequest stream.Send() failed, dropping agent", "error", err)
 				return status.Error(codes.Canceled, "send failed")
 			}
@@ -108,66 +107,69 @@ func (s *server) WaitForRequest(in *pb.WaitForRequestArgs, stream pb.TunnelServi
 	}
 }
 
-func (s *server) registerStream(ctx context.Context, streamID string, echo serviceconfig.HTTPEcho) {
-	s.Lock()
-	defer s.Unlock()
-	s.streams[streamID] = echo
-}
-
-func (s *server) unregisterStream(ctx context.Context, streamID string) {
-	s.Lock()
-	defer s.Unlock()
-	delete(s.streams, streamID)
-}
-
-func (s *server) findStream(ctx context.Context, streamID string) (serviceconfig.HTTPEcho, bool) {
-	s.Lock()
-	defer s.Unlock()
-	echo, found := s.streams[streamID]
-	return echo, found
-}
-
 func (s *server) SendHeaders(ctx context.Context, in *pb.TunnelHeaders) (*pb.SendHeadersResponse, error) {
 	ctx, _ = loggerFromContext(ctx, zap.String("streamID", in.StreamId))
-	echo, found := s.findStream(ctx, in.StreamId)
+	stream, found := s.streamManager.Find(ctx, in.StreamId)
 	if !found {
 		return &pb.SendHeadersResponse{}, status.Error(codes.InvalidArgument, "no such streamID")
 	}
-	err := echo.Headers(ctx, in)
+	err := stream.echo.Headers(ctx, in)
 	return &pb.SendHeadersResponse{}, err
 }
 
-func (s *server) SendData(stream pb.TunnelService_SendDataServer) error {
-	var echo serviceconfig.HTTPEcho
-	ctx := stream.Context()
+func (s *server) CancelStream(ctx context.Context, in *pb.CancelStreamRequest) (*pb.CancelStreamResponse, error) {
+	ctx, _ = loggerFromContext(ctx, zap.String("streamID", in.StreamId))
+	stream, found := s.streamManager.Find(ctx, in.StreamId)
+	if !found {
+		return &pb.CancelStreamResponse{}, status.Error(codes.InvalidArgument, "no such streamID")
+	}
+	err := stream.echo.Cancel(ctx)
+	return &pb.CancelStreamResponse{}, err
+}
+
+func (s *server) done(ctx context.Context, stream *Stream) {
+	if err := stream.echo.Done(ctx); err != nil {
+		_ = stream.echo.Fail(ctx, http.StatusTeapot, err)
+	}
+}
+
+func (s *server) SendData(rpcstream pb.TunnelService_SendDataServer) error {
+	var stream *Stream
+	ctx := rpcstream.Context()
 	var streamID string
 	for {
-		data, err := stream.Recv()
+		data, err := rpcstream.Recv()
+		if err == io.EOF {
+			s.done(ctx, stream)
+			return nil
+		}
 		if err != nil {
-			if echo != nil {
-				_ = echo.Fail(ctx, http.StatusTeapot, err)
+			if serr, ok := status.FromError(err); ok {
+				if serr.Code() == codes.Canceled {
+					return nil
+				}
+			}
+			if stream != nil {
+				_ = stream.echo.Fail(ctx, http.StatusTeapot, err)
 			}
 			return err
 		}
-		if echo == nil {
+		if stream == nil {
 			streamID = data.StreamId
 			ctx, _ = loggerFromContext(ctx, zap.String("streamID", streamID))
 			var found bool
-			echo, found = s.findStream(ctx, streamID)
+			stream, found = s.streamManager.Find(ctx, streamID)
 			if !found {
 				return status.Error(codes.InvalidArgument, "no such streamID")
 			}
-			defer s.unregisterStream(ctx, streamID)
+			defer s.streamManager.Unregister(ctx, streamID)
 		}
 		if len(data.Data) == 0 {
-			if err := echo.Done(ctx); err != nil {
-				_ = echo.Fail(ctx, http.StatusTeapot, err)
-				return status.Error(codes.Internal, fmt.Sprintf("echo.Done() failed: %v", err))
-			}
+			s.done(ctx, stream)
 			return nil
 		}
-		if err := echo.Data(ctx, data.Data); err != nil {
-			_ = echo.Fail(ctx, http.StatusTeapot, err)
+		if err := stream.echo.Data(ctx, data.Data); err != nil {
+			_ = stream.echo.Fail(ctx, http.StatusTeapot, err)
 			return status.Error(codes.Internal, fmt.Sprintf("echo.Data() failed: %v", err))
 		}
 	}
@@ -185,7 +187,7 @@ func runAgentGRPCServer(ctx context.Context, useTLS bool, serverCert *tls.Certif
 
 	s := &server{
 		agentIdleTimeout: idleTimeout.Nanoseconds(),
-		streams:          map[string]serviceconfig.HTTPEcho{},
+		streamManager:    NewStreamManager(),
 	}
 
 	cleanerCtx, cleanerCancel := context.WithCancel(ctx)

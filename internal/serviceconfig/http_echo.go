@@ -47,4 +47,7 @@ type HTTPEcho interface {
 	// this is an error.  Data may not be called, and Done should send
 	// an EOF Data frame.
 	Done(ctx context.Context) error
+	// Cancel terminates a session without handling any error codes, or other
+	// cleanup.  The HTTP request (in or out) should be terminated immediately.
+	Cancel(context context.Context) error
 }

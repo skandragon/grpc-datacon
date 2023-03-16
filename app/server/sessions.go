@@ -176,9 +176,9 @@ func (a *AgentSessions) checkSessionTimeouts(ctx context.Context, idleTimeout in
 }
 
 func (a *AgentSessions) expireOldSessions(ctx context.Context, now int64, idleTimeout int64) {
-	_, logging := loggerFromContext(ctx)
 	a.Lock()
 	defer a.Unlock()
+	_, logging := loggerFromContext(ctx)
 
 	for key, session := range a.agents {
 		if session.LastUse+idleTimeout < now {
@@ -189,9 +189,9 @@ func (a *AgentSessions) expireOldSessions(ctx context.Context, now int64, idleTi
 }
 
 func (a *AgentSessions) GetStatistics() interface{} {
-	ret := []interface{}{}
 	a.RLock()
 	defer a.RUnlock()
+	ret := []interface{}{}
 	for _, ac := range a.agents {
 		ret = append(ret, ac.GetStatistics())
 	}

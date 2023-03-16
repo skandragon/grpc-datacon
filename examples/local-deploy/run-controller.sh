@@ -2,5 +2,5 @@
 
 set -e
 
-../../bin/server --configFile config/controller/config.yaml
+../../bin/server --configFile config/controller/config.yaml --profile
 

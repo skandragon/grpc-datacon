@@ -185,7 +185,8 @@ func runAPIHandler(routes *AgentSessions, ep SessionSearch, w http.ResponseWrite
 
 	session := routes.find(ctx, ep)
 	if session == nil {
-		logger.Warnw("no such agent for service request", "agent")
+		logger.Warnw("no such agent for service request", "agentID", ep.AgentID, "serviceName", ep.ServiceName, "serviceType", ep.ServiceType)
+		w.WriteHeader(http.StatusBadGateway)
 		return
 	}
 
@@ -206,7 +207,6 @@ func runAPIHandler(routes *AgentSessions, ep SessionSearch, w http.ResponseWrite
 	}
 
 	streamID := ulid.GlobalContext.Ulid()
-
 	echo := MakeIncomingEchoer(ctx, streamID)
 
 	session.out <- serviceRequest{
@@ -232,7 +232,7 @@ func runEcho(ctx context.Context, echo *ServerEcho, w http.ResponseWriter, r *ht
 	for {
 		select {
 		case <-r.Context().Done():
-			logger.Infow("client closed, stopping data flow")
+			logger.Debugf("client closed, stopping data flow")
 			// TODO: send cancel event over gRPC
 			return
 		case <-echo.doneChan:
@@ -256,6 +256,7 @@ func runEcho(ctx context.Context, echo *ServerEcho, w http.ResponseWriter, r *ht
 			}
 			flusher.Flush()
 		case headers := <-echo.headersChan:
+			headersSent = true
 			for name := range w.Header() {
 				w.Header().Del(name)
 			}
@@ -264,6 +265,7 @@ func runEcho(ctx context.Context, echo *ServerEcho, w http.ResponseWriter, r *ht
 					w.Header().Add(header.Name, value)
 				}
 			}
+			w.WriteHeader(int(headers.StatusCode))
 		}
 	}
 }

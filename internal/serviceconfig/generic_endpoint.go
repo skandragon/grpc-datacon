@@ -236,17 +236,21 @@ func (ep *GenericEndpoint) ExecuteHTTPRequest(ctx context.Context, agentName str
 		return echo.Fail(ctx, http.StatusBadGateway, err)
 	}
 
+	ctx, cancel := context.WithCancel(ctx)
 	httpRequest, err := http.NewRequestWithContext(ctx, req.Method, ep.config.URL+uri, bytes.NewBuffer(req.Body))
 	if err != nil {
 		err = fmt.Errorf("Failed to build request for %s to %s: %v", req.Method, ep.config.URL+uri, err)
 		logger.Error(err)
+		cancel()
 		return echo.Fail(ctx, http.StatusBadGateway, err)
+
 	}
 
 	err = PBHEadersToHTTP(req.Headers, &httpRequest.Header)
 	if err != nil {
 		err = fmt.Errorf("failed to copy headers: %v", err)
 		logger.Error(err)
+		cancel()
 		return echo.Fail(ctx, http.StatusBadGateway, err)
 	}
 
@@ -280,7 +284,7 @@ func (ep *GenericEndpoint) ExecuteHTTPRequest(ctx context.Context, agentName str
 		httpRequest.Header.Set("Authorization", "Token "+creds.rawToken)
 	}
 
-	RunHTTPRequest(ctx, client, req, httpRequest, echo, ep.config.URL)
+	RunHTTPRequest(ctx, cancel, client, req, httpRequest, echo, ep.config.URL)
 	return nil
 }
 
@@ -291,15 +295,16 @@ func makeResponse(id string, response *http.Response) (*pb.TunnelHeaders, error)
 	}
 	ret := &pb.TunnelHeaders{
 		StreamId:      id,
-		Status:        int32(response.StatusCode),
+		StatusCode:    int32(response.StatusCode),
 		ContentLength: response.ContentLength,
 		Headers:       headers,
 	}
 	return ret, err
 }
 
-func RunHTTPRequest(ctx context.Context, client *http.Client, req *pb.TunnelRequest, httpRequest *http.Request, echo HTTPEcho, baseURL string) {
+func RunHTTPRequest(ctx context.Context, cancel context.CancelFunc, client *http.Client, req *pb.TunnelRequest, httpRequest *http.Request, echo HTTPEcho, baseURL string) {
 	logger := logging.WithContext(ctx).Sugar()
+	defer cancel()
 
 	requestURI := baseURL + req.URI
 	logger.Debugf("Sending HTTP request: %s to %s", req.Method, requestURI)
@@ -340,22 +345,17 @@ func RunHTTPRequest(ctx context.Context, client *http.Client, req *pb.TunnelRequ
 	}
 
 	// Now, send one or more data packet.
+	buf := make([]byte, 10240)
 	for {
-		buf := make([]byte, 10240)
 		n, err := httpResponse.Body.Read(buf)
 		if n > 0 {
 			if err2 := echo.Data(ctx, buf[:n]); err2 != nil {
 				logger.Warn(err)
+				return
 			}
 		}
 		if err == io.EOF {
 			if err2 := echo.Done(ctx); err2 != nil {
-				logger.Warn(err2)
-			}
-			return
-		}
-		if err == context.Canceled {
-			if err2 := echo.Fail(ctx, http.StatusBadGateway, nil); err2 != nil {
 				logger.Warn(err2)
 			}
 			return

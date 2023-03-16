@@ -29,6 +29,7 @@ type AgentEcho struct {
 	c        pb.TunnelServiceClient
 	state    echoState
 	dchan    chan *pb.Data
+	doneChan chan bool
 }
 
 type echoState int
@@ -37,14 +38,16 @@ const (
 	stateHeaders echoState = iota
 	stateData
 	stateDone
+	stateCanceled
 )
 
-func MakeEcho(ctx context.Context, c pb.TunnelServiceClient, streamID string) serviceconfig.HTTPEcho {
+func MakeEcho(ctx context.Context, c pb.TunnelServiceClient, streamID string, doneChan chan bool) serviceconfig.HTTPEcho {
 	e := &AgentEcho{
 		streamID: streamID,
 		c:        c,
 		state:    stateHeaders,
 		dchan:    make(chan *pb.Data),
+		doneChan: doneChan,
 	}
 	go e.RunDataSender(ctx)
 	return e
@@ -53,11 +56,12 @@ func MakeEcho(ctx context.Context, c pb.TunnelServiceClient, streamID string) se
 // TODO: return any errors to "caller"
 func (e *AgentEcho) RunDataSender(ctx context.Context) {
 	ctx, logger := loggerFromContext(ctx)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	stream, err := e.c.SendData(ctx)
 
 	defer func() {
-		err := stream.CloseSend()
-		if err != nil {
+		if err := stream.CloseSend(); err != nil {
 			logger.Warn(err)
 		}
 	}()
@@ -68,11 +72,11 @@ func (e *AgentEcho) RunDataSender(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			e.doneChan <- true
 			logger.Infof("Run() context done")
 			return
 		case d, more := <-e.dchan:
 			if !more {
-				logger.Infof("RunDataSender() exiting")
 				return
 			}
 			err := stream.Send(d)
@@ -106,14 +110,14 @@ func (e *AgentEcho) Data(ctx context.Context, data []byte) error {
 }
 
 func (e *AgentEcho) Fail(ctx context.Context, code int, err error) error {
-	_, logger := loggerFromContext(ctx)
+	ctx, logger := loggerFromContext(ctx)
 	defer close(e.dchan)
 
 	// headers not sent, so we can return a better error
 	if e.state == stateHeaders {
 		h := &pb.TunnelHeaders{
-			StreamId: e.streamID,
-			Status:   int32(code),
+			StreamId:   e.streamID,
+			StatusCode: int32(code),
 		}
 		if _, err := e.c.SendHeaders(ctx, h); err != nil {
 			logger.Errorf("SendHeaders failed (ignoring): %v", err)
@@ -140,5 +144,19 @@ func (e *AgentEcho) Done(ctx context.Context) error {
 		Data:     []byte{},
 	}
 	e.dchan <- d
+	return nil
+}
+
+func (e *AgentEcho) Cancel(ctx context.Context) error {
+	if e.state == stateDone {
+		return nil
+	}
+	ctx, logger := loggerFromContext(ctx)
+	e.state = stateCanceled
+
+	c := &pb.CancelStreamRequest{StreamId: e.streamID}
+	if _, err := e.c.CancelStream(ctx, c); err != nil {
+		logger.Errorf("CancelStream failed (ignoring): %v", err)
+	}
 	return nil
 }
