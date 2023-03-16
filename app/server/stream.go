@@ -30,6 +30,7 @@ type StreamManager struct {
 
 type Stream struct {
 	agentID   string
+	sessionID string
 	echo      serviceconfig.HTTPEcho
 	closechan chan bool
 }
@@ -40,11 +41,12 @@ func NewStreamManager() *StreamManager {
 	}
 }
 
-func (sm *StreamManager) Register(ctx context.Context, agentID string, streamID string, closechan chan bool, echo serviceconfig.HTTPEcho) {
+func (sm *StreamManager) Register(ctx context.Context, session *AgentContext, streamID string, closechan chan bool, echo serviceconfig.HTTPEcho) {
 	sm.Lock()
 	defer sm.Unlock()
 	sm.streams[streamID] = &Stream{
-		agentID:   agentID,
+		agentID:   session.AgentID,
+		sessionID: session.SessionID,
 		echo:      echo,
 		closechan: closechan,
 	}
@@ -71,11 +73,11 @@ func (sm *StreamManager) FlushAgent(ctx context.Context, session *AgentContext) 
 
 func (sm *StreamManager) flushUnlocked(ctx context.Context, session *AgentContext) {
 	_, logger := loggerFromContext(ctx)
-	logger.Infof("flushing agent %s", session.AgentID)
+	logger.Infof("flushing agent %s session %s", session.AgentID, session.SessionID)
 	targets := []string{}
 	for k, v := range sm.streams {
 		logger.Infof("Checking stream %s, agent %s", k, v.agentID)
-		if v.agentID == session.AgentID {
+		if v.sessionID == session.SessionID {
 			targets = append(targets, k)
 		}
 	}

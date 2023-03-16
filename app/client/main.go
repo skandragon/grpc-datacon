@@ -152,9 +152,8 @@ func waitForRequest(ctx context.Context, c pb.TunnelServiceClient) error {
 			continue
 		}
 
-		go func() {
-			<-doneChan
-			cancel()
+		defer func() {
+			echo.Cancel(ctx)
 		}()
 
 		go func() {

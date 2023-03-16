@@ -97,7 +97,7 @@ func (s *server) WaitForRequest(in *pb.WaitForRequestArgs, stream pb.TunnelServi
 			s.closeAgentSession(ctx, session)
 			return status.Error(codes.Canceled, "client closed connection")
 		case sr := <-session.out:
-			s.streamManager.Register(ctx, session.AgentID, sr.req.StreamId, sr.closechan, sr.echo)
+			s.streamManager.Register(ctx, session, sr.req.StreamId, sr.closechan, sr.echo)
 			if err := stream.Send(sr.req); err != nil {
 				s.closeAgentSession(ctx, session)
 				logger.Errorw("WaitForRequest stream.Send() failed, dropping agent", "error", err)
@@ -140,7 +140,9 @@ func (s *server) SendData(rpcstream pb.TunnelService_SendDataServer) error {
 	for {
 		data, err := rpcstream.Recv()
 		if err == io.EOF {
-			s.done(ctx, stream)
+			if stream != nil {
+				s.done(ctx, stream)
+			}
 			return nil
 		}
 		if err != nil {

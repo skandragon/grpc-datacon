@@ -217,10 +217,10 @@ func (ep *GenericEndpoint) ExecuteHTTPRequest(ctx context.Context, agentName str
 		MinVersion: tls.VersionTLS12,
 	}
 	tr := &http.Transport{
-		MaxIdleConns:       10,
-		IdleConnTimeout:    30 * time.Second,
-		DisableCompression: true,
-		TLSClientConfig:    tlsConfig,
+		MaxIdleConns:    5,
+		IdleConnTimeout: 5 * time.Second,
+		//DisableCompression: true,
+		TLSClientConfig: tlsConfig,
 	}
 	if ep.config.Insecure {
 		tr.TLSClientConfig.InsecureSkipVerify = true
@@ -347,6 +347,15 @@ func RunHTTPRequest(ctx context.Context, cancel context.CancelFunc, client *http
 	// Now, send one or more data packet.
 	buf := make([]byte, 10240)
 	for {
+		select {
+		case <-ctx.Done():
+			logger.Infof("context canceled: %v", ctx.Err())
+			if err2 := echo.Cancel(ctx); err2 != nil {
+				logger.Warn(err)
+				return
+			}
+		default:
+		}
 		n, err := httpResponse.Body.Read(buf)
 		if n > 0 {
 			if err2 := echo.Data(ctx, buf[:n]); err2 != nil {
