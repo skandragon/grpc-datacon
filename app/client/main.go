@@ -149,17 +149,15 @@ func waitForRequest(ctx context.Context, c pb.TunnelServiceClient) error {
 			if err := echo.Fail(ctx, http.StatusBadGateway, fmt.Errorf("no such service on agent")); err != nil {
 				logger.Warn(err)
 			}
+			echo.Shutdown(ctx)
 			continue
 		}
-
-		defer func() {
-			echo.Cancel(ctx)
-		}()
 
 		go func() {
 			if err := ep.Instance.ExecuteHTTPRequest(ctx, session.agentID, echo, req); err != nil {
 				logger.Warn(err)
 			}
+			echo.Shutdown(ctx)
 		}()
 	}
 }

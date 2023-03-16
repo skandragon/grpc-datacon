@@ -107,72 +107,68 @@ func (s *server) WaitForRequest(in *pb.WaitForRequestArgs, stream pb.TunnelServi
 	}
 }
 
-func (s *server) SendHeaders(ctx context.Context, in *pb.TunnelHeaders) (*pb.SendHeadersResponse, error) {
-	ctx, _ = loggerFromContext(ctx, zap.String("streamID", in.StreamId))
-	stream, found := s.streamManager.Find(ctx, in.StreamId)
-	if !found {
-		return &pb.SendHeadersResponse{}, status.Error(codes.InvalidArgument, "no such streamID")
-	}
-	err := stream.echo.Headers(ctx, in)
-	return &pb.SendHeadersResponse{}, err
-}
-
-func (s *server) CancelStream(ctx context.Context, in *pb.CancelStreamRequest) (*pb.CancelStreamResponse, error) {
-	ctx, _ = loggerFromContext(ctx, zap.String("streamID", in.StreamId))
-	stream, found := s.streamManager.Find(ctx, in.StreamId)
-	if !found {
-		return &pb.CancelStreamResponse{}, status.Error(codes.InvalidArgument, "no such streamID")
-	}
-	err := stream.echo.Cancel(ctx)
-	return &pb.CancelStreamResponse{}, err
-}
-
 func (s *server) done(ctx context.Context, stream *Stream) {
 	if err := stream.echo.Done(ctx); err != nil {
 		_ = stream.echo.Fail(ctx, http.StatusTeapot, err)
 	}
 }
 
-func (s *server) SendData(rpcstream pb.TunnelService_SendDataServer) error {
-	var stream *Stream
-	ctx := rpcstream.Context()
+func (s *server) getStreamAndID(ctx context.Context, event *pb.StreamFlow) (string, *Stream, error) {
 	var streamID string
+	if sid, ok := event.Event.(*pb.StreamFlow_StreamId); !ok {
+		return "", nil, status.Error(codes.InvalidArgument, "first message must be streamID")
+	} else {
+		streamID = sid.StreamId
+	}
+	stream, streamFound := s.streamManager.Find(ctx, streamID)
+	if !streamFound {
+		return "", nil, status.Error(codes.InvalidArgument, "no such streamID")
+	}
+	return streamID, stream, nil
+}
+
+func (s *server) DataFlowAgentToController(rpcstream pb.TunnelService_DataFlowAgentToControllerServer) error {
+	ctx := rpcstream.Context()
+
+	event, err := rpcstream.Recv()
+	if err != nil {
+		return status.Error(codes.InvalidArgument, "unable to read streamID")
+	}
+	streamID, stream, err := s.getStreamAndID(ctx, event)
+	if err != nil {
+		return err
+	}
+	ctx, logger := loggerFromContext(ctx, zap.String("streamID", streamID))
+	defer s.streamManager.Unregister(ctx, streamID)
+
 	for {
-		data, err := rpcstream.Recv()
+		event, err := rpcstream.Recv()
 		if err == io.EOF {
-			if stream != nil {
-				s.done(ctx, stream)
-			}
+			s.done(ctx, stream)
 			return nil
 		}
 		if err != nil {
+			logger.Infof("stream error: %v", err)
 			if serr, ok := status.FromError(err); ok {
 				if serr.Code() == codes.Canceled {
 					return nil
 				}
 			}
-			if stream != nil {
-				_ = stream.echo.Fail(ctx, http.StatusTeapot, err)
-			}
+			_ = stream.echo.Fail(ctx, http.StatusTeapot, err)
 			return err
 		}
-		if stream == nil {
-			streamID = data.StreamId
-			ctx, _ = loggerFromContext(ctx, zap.String("streamID", streamID))
-			var found bool
-			stream, found = s.streamManager.Find(ctx, streamID)
-			if !found {
-				return status.Error(codes.InvalidArgument, "no such streamID")
-			}
-			defer s.streamManager.Unregister(ctx, streamID)
-		}
-		if len(data.Data) == 0 {
-			s.done(ctx, stream)
+
+		switch event.Event.(type) {
+		case *pb.StreamFlow_Cancel:
+			_ = stream.echo.Cancel(ctx)
 			return nil
-		}
-		if err := stream.echo.Data(ctx, data.Data); err != nil {
-			_ = stream.echo.Fail(ctx, http.StatusTeapot, err)
-			return status.Error(codes.Internal, fmt.Sprintf("echo.Data() failed: %v", err))
+		case *pb.StreamFlow_Done:
+			_ = stream.echo.Done(ctx)
+			return nil
+		case *pb.StreamFlow_Headers:
+			_ = stream.echo.Headers(ctx, event.GetHeaders())
+		case *pb.StreamFlow_Data:
+			_ = stream.echo.Data(ctx, event.GetData().Data)
 		}
 	}
 }

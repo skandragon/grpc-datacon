@@ -57,8 +57,6 @@ message Data {
     bytes data = 3;
 }
 
-message SendDataResponse {}
-
 message TunnelHeaders {
     string streamId = 1;
     int32 statusCode = 3;
@@ -69,12 +67,6 @@ message TunnelHeaders {
 message HttpHeader {
     string name = 1;
     repeated string values = 2;
-}
-
-message SendHeadersResponse {}
-
-message ReceiveDataRequest {
-    string streamId = 1;
 }
 
 message WaitForRequestArgs {}
@@ -94,11 +86,21 @@ message StartTunnelResponse {
     string streamId = 1;
 }
 
-message CancelStreamRequest {
-    string streamId = 1;
+message Cancel {}
+
+message Done {}
+
+message StreamFlow {
+    oneof event {
+        string streamId = 1;
+        TunnelHeaders headers = 2;
+        Data data = 3;
+        Cancel cancel = 4;
+        Done done = 5;
+    }
 }
 
-message CancelStreamResponse {}
+message StreamFlowResponse {}
 
 message PingRequest {
     uint64 ts = 3;
@@ -125,16 +127,7 @@ service TunnelService {
     // any HTTP request found.
     rpc WaitForRequest(WaitForRequestArgs) returns (stream TunnelRequest) {}
 
-    // HTTP data, issued from the agent to controller.
-    //
-    // The Send* methods are when the agent is performing the HTTP request, and
-    // wants to send the headers and data response to the controller, which will
-    // send it to the client.
-    //
-    // The Receive* methods are when the controller is performing the HTTP
-    // request, and the agent has the client which wants the data.
-    rpc SendData(stream Data) returns (SendDataResponse) {}
-    rpc SendHeaders(TunnelHeaders) returns (SendHeadersResponse) {}
-    rpc ReceiveData(ReceiveDataRequest) returns (stream Data) {}
-    rpc CancelStream(CancelStreamRequest) returns (CancelStreamResponse) {}
+    // DataFlowAgentToController is the conduit for an agent to send and manage the
+    // flow of data for a specific HTTP response.
+    rpc DataFlowAgentToController(stream StreamFlow) returns (StreamFlowResponse) {}
 }

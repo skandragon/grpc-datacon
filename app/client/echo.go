@@ -18,178 +18,133 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"io"
+	"sync"
 
 	"github.com/skandragon/grpc-datacon/internal/serviceconfig"
 	pb "github.com/skandragon/grpc-datacon/internal/tunnel"
 )
 
 type AgentEcho struct {
-	streamID      string
-	c             pb.TunnelServiceClient
-	state         echoState
-	dchan         chan *pb.Data
-	doneChan      chan bool
-	localDoneChan chan bool
+	sync.Mutex
+	streamID    string
+	c           pb.TunnelServiceClient
+	msgChan     chan *pb.StreamFlow
+	headersSent bool
+	closed      bool
 }
-
-type echoState int
-
-const (
-	stateHeaders echoState = iota
-	stateData
-	stateDone
-	stateCanceled
-)
 
 func MakeEcho(ctx context.Context, c pb.TunnelServiceClient, streamID string, doneChan chan bool) serviceconfig.HTTPEcho {
 	e := &AgentEcho{
-		streamID:      streamID,
-		c:             c,
-		state:         stateHeaders,
-		dchan:         make(chan *pb.Data),
-		doneChan:      doneChan,
-		localDoneChan: make(chan bool),
+		streamID: streamID,
+		c:        c,
+		msgChan:  make(chan *pb.StreamFlow),
 	}
 	go e.RunDataSender(ctx)
 	return e
+}
+
+func (e *AgentEcho) Shutdown(ctx context.Context) {
+	e.Lock()
+	defer e.Unlock()
+	if !e.closed {
+		e.closed = true
+		e.msgChan <- pb.StreamflowWrapDoneMsg()
+		close(e.msgChan)
+	}
 }
 
 // TODO: return any errors to "caller"
 func (e *AgentEcho) RunDataSender(ctx context.Context) {
 	ctx, logger := loggerFromContext(ctx)
 	ctx, cancel := context.WithCancel(ctx)
-	stream, err := e.c.SendData(ctx)
+	defer cancel()
+
+	stream, err := e.c.DataFlowAgentToController(ctx)
+	if err != nil {
+		logger.Errorf("e.c.DataFlowAgentToController(): %v", err)
+		return
+	}
 
 	defer func() {
-		if err := stream.CloseSend(); err != nil {
-			logger.Warn(err)
+		_, err := stream.CloseAndRecv()
+		if err != nil && err != io.EOF {
+			logger.Info("stream.CloseAndRecv error: %v", err)
 		}
-		cancel()
-		close(e.dchan)
 	}()
 
+	err = stream.Send(pb.StreamflowWrapStreamID(e.streamID))
 	if err != nil {
-		logger.Errorf("e.c.SendData(): %v", err)
+		logger.Errorf("Cannot send stream id: %v", err)
+		return
 	}
+
 	for {
 		select {
 		case <-ctx.Done():
-			e.trySendDone(ctx)
 			logger.Infof("Run() context done")
-			return
-		case <-e.localDoneChan:
-			e.trySendDone(ctx)
-			return
-		case d := <-e.dchan:
-			err := stream.Send(d)
-			if err != nil {
-				logger.Errorf("stream.Send(): %v", err)
-				e.trySendDone(ctx)
-				e.setState(ctx, stateCanceled)
+		case msg, more := <-e.msgChan:
+			if !more {
 				return
+			}
+			if msg != nil {
+				err := stream.Send(msg)
+				if err != nil {
+					logger.Errorf("stream.Send(): %v", err)
+				}
 			}
 		}
 	}
 }
 
-func (e *AgentEcho) setState(ctx context.Context, state echoState) {
-	//logger := logging.WithContext(ctx).Sugar()
-	//logger.Errorf("Setting state: %d", state)
-	e.state = state
-}
-
 func (e *AgentEcho) Headers(ctx context.Context, h *pb.TunnelHeaders) error {
-	if e.state != stateHeaders {
-		return fmt.Errorf("programmer error: Headers called when not in correct state (in %d)", e.state)
-	}
-	h.StreamId = e.streamID
-	e.setState(ctx, stateData)
-	_, err := e.c.SendHeaders(ctx, h)
-	return err
+	e.Lock()
+	defer e.Unlock()
+	e.msgChan <- pb.StreamflowWrapHeaderMsg(h)
+	e.headersSent = true
+	return nil
 }
 
 func (e *AgentEcho) Data(ctx context.Context, data []byte) error {
-	if e.state != stateData {
-		return fmt.Errorf("programmer error: Data called when not in correct state (in %d)", e.state)
-	}
 	d := &pb.Data{
-		StreamId: e.streamID,
-		Data:     data,
+		Data: data,
 	}
-	e.dchan <- d
+	e.msgChan <- pb.StreamflowWrapDataMsg(d)
 	return nil
 }
 
 func (e *AgentEcho) Fail(ctx context.Context, code int, err error) error {
-	ctx, logger := loggerFromContext(ctx)
-	defer e.trySendLocalDone(ctx)
-
-	if e.state == stateCanceled || e.state == stateDone {
-		return nil
-	}
-
-	// headers not sent, so we can return a better error
-	if e.state == stateHeaders {
+	e.Lock()
+	defer e.Unlock()
+	if !e.headersSent {
 		h := &pb.TunnelHeaders{
 			StreamId:   e.streamID,
 			StatusCode: int32(code),
 		}
-		if _, err := e.c.SendHeaders(ctx, h); err != nil {
-			logger.Errorf("SendHeaders failed (ignoring): %v", err)
-		}
+		e.msgChan <- pb.StreamflowWrapHeaderMsg(h)
 	}
-	e.setState(ctx, stateDone)
-
-	// Send EOF data
-	d := &pb.Data{
-		StreamId: e.streamID,
-		Data:     []byte{},
-	}
-	e.dchan <- d
-
+	e.msgChan <- pb.StreamflowWrapDoneMsg()
 	return nil
 }
 
 func (e *AgentEcho) Done(ctx context.Context) error {
-	defer e.trySendLocalDone(ctx)
-	if e.state != stateData {
-		return fmt.Errorf("programmer error: Done called when not in correct state (in %d)", e.state)
+	e.Lock()
+	defer e.Unlock()
+	if !e.closed {
+		e.closed = true
+		e.msgChan <- pb.StreamflowWrapDoneMsg()
+		close(e.msgChan)
 	}
-	d := &pb.Data{
-		StreamId: e.streamID,
-		Data:     []byte{},
-	}
-	e.dchan <- d
-	e.setState(ctx, stateDone)
 	return nil
 }
 
-func (e *AgentEcho) trySendDone(ctx context.Context) {
-	select {
-	case e.doneChan <- true:
-	default:
-	}
-}
-
-func (e *AgentEcho) trySendLocalDone(ctx context.Context) {
-	select {
-	case e.localDoneChan <- true:
-	default:
-	}
-}
-
 func (e *AgentEcho) Cancel(ctx context.Context) error {
-	if e.state == stateDone || e.state == stateCanceled {
-		return nil
-	}
-	defer e.trySendLocalDone(ctx)
-	ctx, logger := loggerFromContext(ctx)
-	e.setState(ctx, stateCanceled)
-
-	c := &pb.CancelStreamRequest{StreamId: e.streamID}
-	if _, err := e.c.CancelStream(ctx, c); err != nil {
-		logger.Errorf("CancelStream failed (ignoring): %v", err)
+	e.Lock()
+	defer e.Unlock()
+	if !e.closed {
+		e.closed = true
+		e.msgChan <- pb.StreamflowWrapCancelMsg()
+		close(e.msgChan)
 	}
 	return nil
 }

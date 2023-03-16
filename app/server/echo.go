@@ -53,6 +53,9 @@ func MakeIncomingEchoer(ctx context.Context, streamID string) *ServerEcho {
 	return e
 }
 
+func (e *ServerEcho) Shutdown(ctx context.Context) {
+}
+
 func (e *ServerEcho) Headers(ctx context.Context, h *pb.TunnelHeaders) error {
 	if e.state != stateHeaders {
 		return fmt.Errorf("programmer error: Headers called when not in correct state (in %d)", e.state)

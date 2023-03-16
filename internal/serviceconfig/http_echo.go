@@ -50,4 +50,7 @@ type HTTPEcho interface {
 	// Cancel terminates a session without handling any error codes, or other
 	// cleanup.  The HTTP request (in or out) should be terminated immediately.
 	Cancel(context context.Context) error
+	// Shutdown cleans anything up if needed.  It should not do anything that can
+	// cause an error, since it doesn't return one.
+	Shutdown(context context.Context)
 }

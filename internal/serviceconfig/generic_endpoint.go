@@ -319,7 +319,6 @@ func RunHTTPRequest(ctx context.Context, cancel context.CancelFunc, client *http
 		}
 		return
 	}
-
 	defer httpResponse.Body.Close()
 
 	// First, send the headers.
@@ -367,6 +366,7 @@ func RunHTTPRequest(ctx context.Context, cancel context.CancelFunc, client *http
 			if err2 := echo.Done(ctx); err2 != nil {
 				logger.Warn(err2)
 			}
+			echo.Shutdown(ctx)
 			return
 		}
 		if err != nil {

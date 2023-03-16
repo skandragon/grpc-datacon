@@ -34,14 +34,11 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	TunnelService_Hello_FullMethodName          = "/tunnel.TunnelService/Hello"
-	TunnelService_Ping_FullMethodName           = "/tunnel.TunnelService/Ping"
-	TunnelService_StartTunnel_FullMethodName    = "/tunnel.TunnelService/StartTunnel"
-	TunnelService_WaitForRequest_FullMethodName = "/tunnel.TunnelService/WaitForRequest"
-	TunnelService_SendData_FullMethodName       = "/tunnel.TunnelService/SendData"
-	TunnelService_SendHeaders_FullMethodName    = "/tunnel.TunnelService/SendHeaders"
-	TunnelService_ReceiveData_FullMethodName    = "/tunnel.TunnelService/ReceiveData"
-	TunnelService_CancelStream_FullMethodName   = "/tunnel.TunnelService/CancelStream"
+	TunnelService_Hello_FullMethodName                     = "/tunnel.TunnelService/Hello"
+	TunnelService_Ping_FullMethodName                      = "/tunnel.TunnelService/Ping"
+	TunnelService_StartTunnel_FullMethodName               = "/tunnel.TunnelService/StartTunnel"
+	TunnelService_WaitForRequest_FullMethodName            = "/tunnel.TunnelService/WaitForRequest"
+	TunnelService_DataFlowAgentToController_FullMethodName = "/tunnel.TunnelService/DataFlowAgentToController"
 )
 
 // TunnelServiceClient is the client API for TunnelService service.
@@ -58,18 +55,9 @@ type TunnelServiceClient interface {
 	// The agent will perform a long-running call to WaitForRequest() and handle
 	// any HTTP request found.
 	WaitForRequest(ctx context.Context, in *WaitForRequestArgs, opts ...grpc.CallOption) (TunnelService_WaitForRequestClient, error)
-	// HTTP data, issued from the agent to controller.
-	//
-	// The Send* methods are when the agent is performing the HTTP request, and
-	// wants to send the headers and data response to the controller, which will
-	// send it to the client.
-	//
-	// The Receive* methods are when the controller is performing the HTTP
-	// request, and the agent has the client which wants the data.
-	SendData(ctx context.Context, opts ...grpc.CallOption) (TunnelService_SendDataClient, error)
-	SendHeaders(ctx context.Context, in *TunnelHeaders, opts ...grpc.CallOption) (*SendHeadersResponse, error)
-	ReceiveData(ctx context.Context, in *ReceiveDataRequest, opts ...grpc.CallOption) (TunnelService_ReceiveDataClient, error)
-	CancelStream(ctx context.Context, in *CancelStreamRequest, opts ...grpc.CallOption) (*CancelStreamResponse, error)
+	// DataFlowAgentToController is the conduit for an agent to send and manage the
+	// flow of data for a specific HTTP response.
+	DataFlowAgentToController(ctx context.Context, opts ...grpc.CallOption) (TunnelService_DataFlowAgentToControllerClient, error)
 }
 
 type tunnelServiceClient struct {
@@ -139,88 +127,38 @@ func (x *tunnelServiceWaitForRequestClient) Recv() (*TunnelRequest, error) {
 	return m, nil
 }
 
-func (c *tunnelServiceClient) SendData(ctx context.Context, opts ...grpc.CallOption) (TunnelService_SendDataClient, error) {
-	stream, err := c.cc.NewStream(ctx, &TunnelService_ServiceDesc.Streams[1], TunnelService_SendData_FullMethodName, opts...)
+func (c *tunnelServiceClient) DataFlowAgentToController(ctx context.Context, opts ...grpc.CallOption) (TunnelService_DataFlowAgentToControllerClient, error) {
+	stream, err := c.cc.NewStream(ctx, &TunnelService_ServiceDesc.Streams[1], TunnelService_DataFlowAgentToController_FullMethodName, opts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &tunnelServiceSendDataClient{stream}
+	x := &tunnelServiceDataFlowAgentToControllerClient{stream}
 	return x, nil
 }
 
-type TunnelService_SendDataClient interface {
-	Send(*Data) error
-	CloseAndRecv() (*SendDataResponse, error)
+type TunnelService_DataFlowAgentToControllerClient interface {
+	Send(*StreamFlow) error
+	CloseAndRecv() (*StreamFlowResponse, error)
 	grpc.ClientStream
 }
 
-type tunnelServiceSendDataClient struct {
+type tunnelServiceDataFlowAgentToControllerClient struct {
 	grpc.ClientStream
 }
 
-func (x *tunnelServiceSendDataClient) Send(m *Data) error {
+func (x *tunnelServiceDataFlowAgentToControllerClient) Send(m *StreamFlow) error {
 	return x.ClientStream.SendMsg(m)
 }
 
-func (x *tunnelServiceSendDataClient) CloseAndRecv() (*SendDataResponse, error) {
+func (x *tunnelServiceDataFlowAgentToControllerClient) CloseAndRecv() (*StreamFlowResponse, error) {
 	if err := x.ClientStream.CloseSend(); err != nil {
 		return nil, err
 	}
-	m := new(SendDataResponse)
+	m := new(StreamFlowResponse)
 	if err := x.ClientStream.RecvMsg(m); err != nil {
 		return nil, err
 	}
 	return m, nil
-}
-
-func (c *tunnelServiceClient) SendHeaders(ctx context.Context, in *TunnelHeaders, opts ...grpc.CallOption) (*SendHeadersResponse, error) {
-	out := new(SendHeadersResponse)
-	err := c.cc.Invoke(ctx, TunnelService_SendHeaders_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *tunnelServiceClient) ReceiveData(ctx context.Context, in *ReceiveDataRequest, opts ...grpc.CallOption) (TunnelService_ReceiveDataClient, error) {
-	stream, err := c.cc.NewStream(ctx, &TunnelService_ServiceDesc.Streams[2], TunnelService_ReceiveData_FullMethodName, opts...)
-	if err != nil {
-		return nil, err
-	}
-	x := &tunnelServiceReceiveDataClient{stream}
-	if err := x.ClientStream.SendMsg(in); err != nil {
-		return nil, err
-	}
-	if err := x.ClientStream.CloseSend(); err != nil {
-		return nil, err
-	}
-	return x, nil
-}
-
-type TunnelService_ReceiveDataClient interface {
-	Recv() (*Data, error)
-	grpc.ClientStream
-}
-
-type tunnelServiceReceiveDataClient struct {
-	grpc.ClientStream
-}
-
-func (x *tunnelServiceReceiveDataClient) Recv() (*Data, error) {
-	m := new(Data)
-	if err := x.ClientStream.RecvMsg(m); err != nil {
-		return nil, err
-	}
-	return m, nil
-}
-
-func (c *tunnelServiceClient) CancelStream(ctx context.Context, in *CancelStreamRequest, opts ...grpc.CallOption) (*CancelStreamResponse, error) {
-	out := new(CancelStreamResponse)
-	err := c.cc.Invoke(ctx, TunnelService_CancelStream_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
 }
 
 // TunnelServiceServer is the server API for TunnelService service.
@@ -237,18 +175,9 @@ type TunnelServiceServer interface {
 	// The agent will perform a long-running call to WaitForRequest() and handle
 	// any HTTP request found.
 	WaitForRequest(*WaitForRequestArgs, TunnelService_WaitForRequestServer) error
-	// HTTP data, issued from the agent to controller.
-	//
-	// The Send* methods are when the agent is performing the HTTP request, and
-	// wants to send the headers and data response to the controller, which will
-	// send it to the client.
-	//
-	// The Receive* methods are when the controller is performing the HTTP
-	// request, and the agent has the client which wants the data.
-	SendData(TunnelService_SendDataServer) error
-	SendHeaders(context.Context, *TunnelHeaders) (*SendHeadersResponse, error)
-	ReceiveData(*ReceiveDataRequest, TunnelService_ReceiveDataServer) error
-	CancelStream(context.Context, *CancelStreamRequest) (*CancelStreamResponse, error)
+	// DataFlowAgentToController is the conduit for an agent to send and manage the
+	// flow of data for a specific HTTP response.
+	DataFlowAgentToController(TunnelService_DataFlowAgentToControllerServer) error
 	mustEmbedUnimplementedTunnelServiceServer()
 }
 
@@ -268,17 +197,8 @@ func (UnimplementedTunnelServiceServer) StartTunnel(context.Context, *TunnelRequ
 func (UnimplementedTunnelServiceServer) WaitForRequest(*WaitForRequestArgs, TunnelService_WaitForRequestServer) error {
 	return status.Errorf(codes.Unimplemented, "method WaitForRequest not implemented")
 }
-func (UnimplementedTunnelServiceServer) SendData(TunnelService_SendDataServer) error {
-	return status.Errorf(codes.Unimplemented, "method SendData not implemented")
-}
-func (UnimplementedTunnelServiceServer) SendHeaders(context.Context, *TunnelHeaders) (*SendHeadersResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method SendHeaders not implemented")
-}
-func (UnimplementedTunnelServiceServer) ReceiveData(*ReceiveDataRequest, TunnelService_ReceiveDataServer) error {
-	return status.Errorf(codes.Unimplemented, "method ReceiveData not implemented")
-}
-func (UnimplementedTunnelServiceServer) CancelStream(context.Context, *CancelStreamRequest) (*CancelStreamResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method CancelStream not implemented")
+func (UnimplementedTunnelServiceServer) DataFlowAgentToController(TunnelService_DataFlowAgentToControllerServer) error {
+	return status.Errorf(codes.Unimplemented, "method DataFlowAgentToController not implemented")
 }
 func (UnimplementedTunnelServiceServer) mustEmbedUnimplementedTunnelServiceServer() {}
 
@@ -368,87 +288,30 @@ func (x *tunnelServiceWaitForRequestServer) Send(m *TunnelRequest) error {
 	return x.ServerStream.SendMsg(m)
 }
 
-func _TunnelService_SendData_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(TunnelServiceServer).SendData(&tunnelServiceSendDataServer{stream})
+func _TunnelService_DataFlowAgentToController_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(TunnelServiceServer).DataFlowAgentToController(&tunnelServiceDataFlowAgentToControllerServer{stream})
 }
 
-type TunnelService_SendDataServer interface {
-	SendAndClose(*SendDataResponse) error
-	Recv() (*Data, error)
+type TunnelService_DataFlowAgentToControllerServer interface {
+	SendAndClose(*StreamFlowResponse) error
+	Recv() (*StreamFlow, error)
 	grpc.ServerStream
 }
 
-type tunnelServiceSendDataServer struct {
+type tunnelServiceDataFlowAgentToControllerServer struct {
 	grpc.ServerStream
 }
 
-func (x *tunnelServiceSendDataServer) SendAndClose(m *SendDataResponse) error {
+func (x *tunnelServiceDataFlowAgentToControllerServer) SendAndClose(m *StreamFlowResponse) error {
 	return x.ServerStream.SendMsg(m)
 }
 
-func (x *tunnelServiceSendDataServer) Recv() (*Data, error) {
-	m := new(Data)
+func (x *tunnelServiceDataFlowAgentToControllerServer) Recv() (*StreamFlow, error) {
+	m := new(StreamFlow)
 	if err := x.ServerStream.RecvMsg(m); err != nil {
 		return nil, err
 	}
 	return m, nil
-}
-
-func _TunnelService_SendHeaders_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(TunnelHeaders)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(TunnelServiceServer).SendHeaders(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: TunnelService_SendHeaders_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(TunnelServiceServer).SendHeaders(ctx, req.(*TunnelHeaders))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _TunnelService_ReceiveData_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(ReceiveDataRequest)
-	if err := stream.RecvMsg(m); err != nil {
-		return err
-	}
-	return srv.(TunnelServiceServer).ReceiveData(m, &tunnelServiceReceiveDataServer{stream})
-}
-
-type TunnelService_ReceiveDataServer interface {
-	Send(*Data) error
-	grpc.ServerStream
-}
-
-type tunnelServiceReceiveDataServer struct {
-	grpc.ServerStream
-}
-
-func (x *tunnelServiceReceiveDataServer) Send(m *Data) error {
-	return x.ServerStream.SendMsg(m)
-}
-
-func _TunnelService_CancelStream_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CancelStreamRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(TunnelServiceServer).CancelStream(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: TunnelService_CancelStream_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(TunnelServiceServer).CancelStream(ctx, req.(*CancelStreamRequest))
-	}
-	return interceptor(ctx, in, info, handler)
 }
 
 // TunnelService_ServiceDesc is the grpc.ServiceDesc for TunnelService service.
@@ -470,14 +333,6 @@ var TunnelService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "StartTunnel",
 			Handler:    _TunnelService_StartTunnel_Handler,
 		},
-		{
-			MethodName: "SendHeaders",
-			Handler:    _TunnelService_SendHeaders_Handler,
-		},
-		{
-			MethodName: "CancelStream",
-			Handler:    _TunnelService_CancelStream_Handler,
-		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
@@ -486,14 +341,9 @@ var TunnelService_ServiceDesc = grpc.ServiceDesc{
 			ServerStreams: true,
 		},
 		{
-			StreamName:    "SendData",
-			Handler:       _TunnelService_SendData_Handler,
+			StreamName:    "DataFlowAgentToController",
+			Handler:       _TunnelService_DataFlowAgentToController_Handler,
 			ClientStreams: true,
-		},
-		{
-			StreamName:    "ReceiveData",
-			Handler:       _TunnelService_ReceiveData_Handler,
-			ServerStreams: true,
 		},
 	},
 	Metadata: "internal/tunnel/tunnel.proto",
